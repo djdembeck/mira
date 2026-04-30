@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any
+
+from jinja2 import Environment, FileSystemLoader
 
 from mira.config import load_config
 from mira.core.engine import ReviewEngine
+from mira.dashboard.models_config import llm_config_for
 from mira.github_app.auth import GitHubAppAuth
 from mira.index.store import IndexStore
 from mira.llm.prompts.conversation import build_conversation_prompt
-from mira.llm.provider import LLMProvider
+from mira.llm.provider import SUBMIT_THREAD_REPLY_TOOL, LLMProvider
+from mira.models import PRInfo
 from mira.providers import create_provider
 
 logger = logging.getLogger(__name__)
@@ -188,15 +194,6 @@ async def _handle_thread_freeform_reply(
     - ``agreement`` → brief acknowledgement, leave thread open.
     - ``other`` → conservative neutral acknowledgement.
     """
-    import json
-    from pathlib import Path
-
-    from jinja2 import Environment, FileSystemLoader
-
-    from mira.dashboard.models_config import llm_config_for
-    from mira.llm.provider import SUBMIT_THREAD_REPLY_TOOL
-    from mira.models import PRInfo
-
     installation_id: int = payload.get("installation", {}).get("id", 0)
     try:
         token = await app_auth.get_installation_token(installation_id)
