@@ -261,18 +261,27 @@ class GitHubProvider(BaseProvider):
         if not result.comments:
             return
 
-        # Build inline comments (no retry needed for local formatting)
+        # Build inline comments (no retry needed for local formatting).
+        #
+        # We always set ``side="RIGHT"`` (the post-PR / new-file side of
+        # the diff). Without it GitHub sometimes returns a vague 422
+        # "An internal error occurred" instead of accepting the comment
+        # — the modern review-comments API treats ``side`` as effectively
+        # required when using ``line`` rather than the deprecated
+        # ``position``. Multi-line comments need ``start_side`` too.
         review_comments: list[dict[str, str | int]] = []
         for comment in result.comments:
             body = _format_comment_body(comment, bot_name=bot_name)
             rc: dict[str, str | int] = {
                 "path": comment.path,
                 "body": body,
+                "side": "RIGHT",
             }
             # PyGithub uses 'line' for single-line, 'start_line'+'line' for multi-line
             if comment.end_line and comment.end_line > comment.line:
                 rc["start_line"] = comment.line
                 rc["line"] = comment.end_line
+                rc["start_side"] = "RIGHT"
             else:
                 rc["line"] = comment.line
 
@@ -311,36 +320,75 @@ class GitHubProvider(BaseProvider):
                     exc.data,
                 )
 
-            # Fallback: post each comment individually so one bad line
-            # doesn't kill all comments.
+            # Fallback: post each comment individually via the standalone
+            # /comments endpoint (``create_review_comment``) rather than
+            # wrapping each in another /reviews call. The /reviews endpoint
+            # has stricter atomicity validation that returns vague 422s
+            # for some valid-looking requests; /comments accepts the same
+            # request shape with more lenient checking. We accept the
+            # tradeoff that the inlines aren't grouped under a single
+            # "review" object — they still appear as inline comments on
+            # the PR, which is what the user actually sees.
+            #
+            # We log the *full* 422 body for each skipped comment rather
+            # than assuming "line not in diff" — GitHub also returns 422
+            # with vague "internal error" bodies for things like stale
+            # commit refs and validation hiccups, and conflating those
+            # with line-mismatch loses important diagnostic info.
             posted = 0
             for rc in review_comments:
                 try:
-                    pr.create_review(
-                        commit=latest_commit,
-                        body="",
-                        event="COMMENT",
-                        comments=[rc],  # type: ignore[arg-type]
+                    kwargs: dict = {
+                        "body": rc["body"],
+                        "commit": latest_commit,
+                        "path": rc["path"],
+                    }
+                    if "line" in rc:
+                        kwargs["line"] = rc["line"]
+                    if "side" in rc:
+                        kwargs["side"] = rc["side"]
+                    if "start_line" in rc:
+                        kwargs["start_line"] = rc["start_line"]
+                    if "start_side" in rc:
+                        kwargs["start_side"] = rc["start_side"]
+                    logger.info(
+                        "POST /comments commit=%s path=%s line=%s side=%s body_len=%d",
+                        getattr(latest_commit, "sha", "?")[:8],
+                        kwargs.get("path"),
+                        kwargs.get("line"),
+                        kwargs.get("side"),
+                        len(kwargs.get("body", "")),
                     )
+                    pr.create_review_comment(**kwargs)
                     posted += 1
                 except GithubException as exc:
                     if exc.status == 422:
                         logger.warning(
-                            "Skipping comment on %s:%s — line not in diff",
+                            "Skipping comment on %s:%s — 422 from GitHub: %s",
                             rc.get("path"),
                             rc.get("line"),
+                            exc.data,
                         )
                     else:
                         raise
 
+            # Always make sure SOMETHING posts. If every inline failed,
+            # post the summary + Key Issues table on its own so the user
+            # at least sees the review existed.
             if posted == 0 and review_body:
-                # All inline comments failed but we still have a summary
-                pr.create_review(
-                    commit=latest_commit,
-                    body=review_body,
-                    event="COMMENT",
-                    comments=[],
-                )
+                try:
+                    pr.create_review(
+                        commit=latest_commit,
+                        body=review_body,
+                        event="COMMENT",
+                        comments=[],
+                    )
+                except GithubException as exc:
+                    logger.warning(
+                        "Summary-only fallback also failed (%s): %s",
+                        exc.status,
+                        exc.data,
+                    )
 
             logger.info("Individual fallback: posted %d/%d comments", posted, len(review_comments))
 
@@ -1092,6 +1140,28 @@ def _format_comment_body(comment: ReviewComment, bot_name: str = "miracodeai") -
             clean = _html_mod.unescape(comment.suggestion)
             prompt_text += f"\n\nApply this code change:\n\n{clean}"
 
+        # Use a markdown fence inside the ``<details>`` block (not
+        # ``<pre>``). GitHub's review-comment endpoint silently rejects
+        # comment bodies containing certain raw-HTML constructs — a
+        # ``<pre>{escaped}</pre>`` block on PR#41 produced 422 "internal
+        # error" responses with no useful diagnostics. The format that
+        # actually posts (and was used successfully on PR#40 et al.) is
+        # a fenced code block with blank lines separating it from the
+        # surrounding ``<details>`` HTML, so GitHub parses the inner
+        # text as markdown rather than raw HTML. _html_mod stays
+        # imported above for parity with the previous unescape on
+        # ``comment.suggestion`` if it ever needs to grow.
+        max_run = 0
+        run = 0
+        for ch in prompt_text:
+            if ch == "`":
+                run += 1
+                if run > max_run:
+                    max_run = run
+            else:
+                run = 0
+        fence = "`" * max(3, max_run + 1)
+
         parts.append("")
         parts.append("---")
         parts.append("")
@@ -1099,10 +1169,11 @@ def _format_comment_body(comment: ReviewComment, bot_name: str = "miracodeai") -
             "<details>\n"
             "<summary>Prompt for AI Agents</summary>\n"
             "\n"
-            f"<pre>{_html_mod.escape(prompt_text)}</pre>\n"
+            f"{fence}\n{prompt_text}\n{fence}\n"
             "\n"
             "</details>"
         )
+        _ = _html_mod  # imported for backward-compat with suggestion path
 
     parts.append("")
     parts.append(f"> Not useful? Reply `@{bot_name} reject` to dismiss this suggestion.")

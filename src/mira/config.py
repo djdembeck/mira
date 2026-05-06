@@ -90,8 +90,12 @@ class ReviewConfig(BaseModel):
     self_critique: bool = True
 
     # Run a dedicated security review pass in parallel with the main review.
-    # Uses the review LLM with a security-focused prompt (XSS, injection,
-    # auth bypass, CSRF, SSRF, origin validation, deserialization, crypto).
+    # Uses the *indexing* tier LLM with a security-focused prompt (XSS,
+    # injection, auth bypass, CSRF, SSRF, origin validation, deserialization,
+    # crypto). The main pass on the review tier still catches deeper
+    # chained-inference security bugs — this pass is the cheap pattern-
+    # matching sweep on top. Set ``llm.indexing_model`` to the same model
+    # as ``llm.review_model`` if you want the heavy model on every pass.
     # Findings are merged into the main review's comments list and go
     # through the same noise filter (dedup against overlapping main-pass
     # findings).

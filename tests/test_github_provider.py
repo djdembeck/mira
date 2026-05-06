@@ -263,6 +263,139 @@ class TestGitHubRetry:
         mock_repo.get_pull.assert_called_once()
 
 
+class TestPostReviewGracefulDegradation:
+    """When GitHub returns 422 on the batch post (regardless of the
+    specific reason — line-mismatch, vague 'internal error', etc.), the
+    provider must fall back to individual posts and, if those all fail
+    too, post the summary alone. Anything else means a partial outage
+    drops the review entirely — see PR#41 where the bot posted nothing
+    despite producing 5 valid findings."""
+
+    @pytest.mark.asyncio
+    async def test_individual_failures_still_post_summary(self):
+        """All inline comments 422 → summary still gets posted on its own."""
+        provider = GitHubProvider.__new__(GitHubProvider)
+        provider._token = "test-token"
+
+        pr_info = _make_pr_info()
+        result = ReviewResult(
+            comments=[
+                ReviewComment(
+                    path="a.py",
+                    line=1,
+                    end_line=None,
+                    severity=Severity.WARNING,
+                    category="bug",
+                    title="Issue",
+                    body="desc",
+                    confidence=0.9,
+                ),
+            ],
+            summary="Found issues",
+        )
+
+        gh_422 = GithubException(
+            status=422,
+            data={"errors": ["An internal error occurred, please try again."]},
+        )
+        review_calls: list[dict] = []
+
+        def _create_review(**kwargs):
+            review_calls.append(kwargs)
+            comments = kwargs.get("comments") or []
+            # Batch fails; summary-only (empty comments) succeeds.
+            if comments:
+                raise gh_422
+
+        mock_commit = MagicMock()
+        mock_pr = MagicMock()
+        mock_pr.get_commits.return_value = [mock_commit]
+        mock_pr.create_review.side_effect = _create_review
+        mock_pr.create_review_comment.side_effect = gh_422
+
+        mock_repo = MagicMock()
+        mock_repo.get_pull.return_value = mock_pr
+
+        mock_gh = MagicMock()
+        mock_gh.get_repo.return_value = mock_repo
+        provider._github = mock_gh
+
+        await provider.post_review(pr_info, result)
+
+        # 1 batch /reviews call + 1 individual /comments call + 1 summary-
+        # only /reviews call.
+        assert len(review_calls) == 2  # batch + summary-only
+        assert mock_pr.create_review_comment.call_count == 1
+        # Summary-only call is the last /reviews call and has comments=[].
+        final = review_calls[-1]
+        assert final.get("comments") == []
+        assert "Mira Review Summary" in final.get("body", "")
+
+    @pytest.mark.asyncio
+    async def test_partial_individual_success(self):
+        """One bad line, one good line — the good one still posts."""
+        provider = GitHubProvider.__new__(GitHubProvider)
+        provider._token = "test-token"
+
+        pr_info = _make_pr_info()
+        result = ReviewResult(
+            comments=[
+                ReviewComment(
+                    path="a.py",
+                    line=1,
+                    end_line=None,
+                    severity=Severity.WARNING,
+                    category="bug",
+                    title="Bad line",
+                    body="desc",
+                    confidence=0.9,
+                ),
+                ReviewComment(
+                    path="b.py",
+                    line=2,
+                    end_line=None,
+                    severity=Severity.WARNING,
+                    category="bug",
+                    title="Good line",
+                    body="desc",
+                    confidence=0.9,
+                ),
+            ],
+            summary="Found issues",
+        )
+
+        gh_422 = GithubException(status=422, data={"message": "bad line"})
+
+        def _create_review(**kwargs):
+            # Batch /reviews fails to trigger fallback.
+            raise gh_422
+
+        def _create_review_comment(**kwargs):
+            # Individual /comments: a.py fails, b.py succeeds.
+            if kwargs.get("path") == "a.py":
+                raise gh_422
+
+        mock_commit = MagicMock()
+        mock_pr = MagicMock()
+        mock_pr.get_commits.return_value = [mock_commit]
+        mock_pr.create_review.side_effect = _create_review
+        mock_pr.create_review_comment.side_effect = _create_review_comment
+
+        mock_repo = MagicMock()
+        mock_repo.get_pull.return_value = mock_pr
+
+        mock_gh = MagicMock()
+        mock_gh.get_repo.return_value = mock_repo
+        provider._github = mock_gh
+
+        await provider.post_review(pr_info, result)
+
+        # 1 batch (failed) + 2 individual /comments calls.
+        # No summary-only fallback because b.py posted.
+        assert mock_pr.create_review.call_count == 1
+        assert mock_pr.create_review_comment.call_count == 2
+
+
 class TestFormatCommentBody:
     """Tests for the richer comment formatting."""
 

@@ -1235,11 +1235,20 @@ class ReviewEngine:
         files: list,
         pr_title: str = "",
     ) -> list[ReviewComment]:
-        """Dedicated security review using the same review-tier LLM.
+        """Dedicated security review on the configured indexing model.
 
         Runs in parallel with the main review. The output is a list of
         ``ReviewComment`` to merge into ``all_comments`` before noise
         filtering — overlapping findings dedupe naturally.
+
+        Routed through the indexing tier (typically a smaller, cheaper
+        model) because security findings here are mostly pattern-shaped
+        — XSS, injection, hard-coded secrets, missing CSRF — and don't
+        need the deeper reasoning the main pass does. Defense-in-depth:
+        the main pass on the review tier still catches the chained-
+        inference security bugs. Users who want the heavy model on
+        every pass can set ``llm.indexing_model`` to the same model as
+        ``llm.review_model``.
 
         Returns ``[]`` and logs (debug) on any failure so a transient
         LLM/API error doesn't kill the main review.
@@ -1259,19 +1268,52 @@ class ReviewEngine:
             # migrations / specs CAN still introduce auth/permission bugs.
             narrowed = files
 
+        from mira.config import load_config
+        from mira.dashboard.models_config import llm_config_for
         from mira.llm.prompts.review import build_security_review_prompt
-        from mira.llm.provider import SUBMIT_REVIEW_TOOL
+        from mira.llm.provider import SUBMIT_REVIEW_TOOL, LLMProvider
 
+        # Build a security LLM on the indexing tier. If the config is
+        # missing the indexing model (or load_config raises in some
+        # exotic test setup), fall back to the main LLM rather than
+        # skip the pass entirely.
         try:
-            messages = build_security_review_prompt(files=narrowed, pr_title=pr_title)
-            raw = await self.llm.complete_with_tools(
+            base_config = load_config()
+            security_llm = LLMProvider(llm_config_for("indexing", base_config.llm))
+        except Exception:
+            security_llm = self.llm
+
+        messages = build_security_review_prompt(files=narrowed, pr_title=pr_title)
+        try:
+            raw = await security_llm.complete_with_tools(
                 messages=messages,
                 tools=[SUBMIT_REVIEW_TOOL],
                 temperature=0.0,
             )
         except Exception as exc:
-            logger.warning("Security review pass failed: %s", exc)
-            return []
+            # The indexing-tier model can fail at call time even when
+            # construction succeeded (missing API key, model not routable
+            # by the provider, etc.). Retry on the main LLM rather than
+            # silently dropping the whole security pass — paying review-
+            # tier cost on this PR is the right tradeoff vs losing the
+            # findings.
+            if security_llm is not self.llm:
+                logger.debug(
+                    "Security pass on indexing tier failed (%s); retrying on review LLM",
+                    exc,
+                )
+                try:
+                    raw = await self.llm.complete_with_tools(
+                        messages=messages,
+                        tools=[SUBMIT_REVIEW_TOOL],
+                        temperature=0.0,
+                    )
+                except Exception as exc2:
+                    logger.warning("Security review pass failed: %s", exc2)
+                    return []
+            else:
+                logger.warning("Security review pass failed: %s", exc)
+                return []
 
         try:
             parsed = parse_llm_response(raw)

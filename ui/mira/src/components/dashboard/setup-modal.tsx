@@ -46,21 +46,37 @@ export function SetupModal({
   useEffect(() => {
     if (!open) return
 
+    let cancelled = false
+    let interval: ReturnType<typeof setInterval> | null = null
+
     const load = async () => {
       const [data, models, est] = await Promise.all([
         api.listRepos(),
         api.getModels(),
         api.getCostEstimate().catch(() => null),
       ])
+      if (cancelled) return
       setRepos(data.filter((r) => r.status === "pending"))
       setIndexingModel(models.indexing_model)
       if (est) setEstimate(est)
       setLoading(false)
+      // The poll exists so the UI catches up when the backend's
+      // file-count scan is still in flight. Once we have a definitive
+      // estimate (any non-null response), there's nothing more to wait
+      // for — keep polling and the UI just hammers the API forever,
+      // which is what produced the stuck "Calculating" badge.
+      if (est && interval) {
+        clearInterval(interval)
+        interval = null
+      }
     }
 
     load()
-    const interval = setInterval(load, 2000)
-    return () => clearInterval(interval)
+    interval = setInterval(load, 2000)
+    return () => {
+      cancelled = true
+      if (interval) clearInterval(interval)
+    }
   }, [open])
 
   const handleStart = async () => {
@@ -156,25 +172,29 @@ export function SetupModal({
             <div className="rounded-lg border bg-muted/30 p-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Estimated cost</span>
-                {estimate && estimate.file_count > 0 ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Badge variant="secondary" className="cursor-help">
-                        {formatCost(estimate.estimated_usd)}
-                      </Badge>
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-xs">
-                      <p className="mb-1 font-medium">Rough estimate</p>
-                      <p className="text-xs">
-                        Based on ~800 input + 400 output tokens per file. Actual
-                        cost varies with file size, symbol density, and retries.
-                      </p>
-                      <div className="mt-2 space-y-0.5 text-xs">
-                        <div>Input: {estimate.input_tokens.toLocaleString()} tokens</div>
-                        <div>Output: {estimate.output_tokens.toLocaleString()} tokens</div>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
+                {estimate ? (
+                  estimate.file_count > 0 ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="secondary" className="cursor-help">
+                          {formatCost(estimate.estimated_usd)}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs">
+                        <p className="mb-1 font-medium">Rough estimate</p>
+                        <p className="text-xs">
+                          Based on ~800 input + 400 output tokens per file. Actual
+                          cost varies with file size, symbol density, and retries.
+                        </p>
+                        <div className="mt-2 space-y-0.5 text-xs">
+                          <div>Input: {estimate.input_tokens.toLocaleString()} tokens</div>
+                          <div>Output: {estimate.output_tokens.toLocaleString()} tokens</div>
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <Badge variant="secondary">No indexable files</Badge>
+                  )
                 ) : (
                   <Badge variant="secondary" className="gap-1.5">
                     <Loader2 className="h-3 w-3 animate-spin" />
