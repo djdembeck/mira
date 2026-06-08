@@ -827,6 +827,9 @@ class AppDatabase:
                     "UPDATE repos SET private=%s WHERE owner=%s AND repo=%s",
                     (private, owner, repo),
                 )
+            # Explicit commit mirrors set_last_reviewed_sha — the connection is
+            # autocommit today, but this keeps the write safe if that changes.
+            self._pg_conn.commit()
 
     # ── Settings ──
 
