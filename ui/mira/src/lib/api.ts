@@ -335,7 +335,7 @@ export const api = {
         enabled: boolean
         format: string
       }[]
-      available_events: { value: string; label: string }[]
+      available_events: { value: string; label: string; description: string }[]
     }>("/api/admin/webhooks"),
 
   createWebhook: (body: {

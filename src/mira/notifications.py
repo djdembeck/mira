@@ -29,12 +29,28 @@ REVIEW_FAILED = "review.failed"
 REVIEW_HIGH_SEVERITY = "review.high_severity"
 INDEXING_COMPLETED = "indexing.completed"
 
-# Surfaced to the Settings UI so it can render an event checkbox per webhook.
+# Surfaced to the Settings UI so it can render an event picker per webhook.
 AVAILABLE_EVENTS: list[dict[str, str]] = [
-    {"value": REVIEW_COMPLETED, "label": "Review completed"},
-    {"value": REVIEW_HIGH_SEVERITY, "label": "High-severity findings"},
-    {"value": REVIEW_FAILED, "label": "Review failed"},
-    {"value": INDEXING_COMPLETED, "label": "Indexing completed"},
+    {
+        "value": REVIEW_COMPLETED,
+        "label": "Review completed",
+        "description": "After Mira finishes reviewing a pull request.",
+    },
+    {
+        "value": REVIEW_HIGH_SEVERITY,
+        "label": "High-severity findings",
+        "description": "When a review surfaces a blocker or warning.",
+    },
+    {
+        "value": REVIEW_FAILED,
+        "label": "Review failed",
+        "description": "When a review errors out instead of completing.",
+    },
+    {
+        "value": INDEXING_COMPLETED,
+        "label": "Indexing completed",
+        "description": "When a repository finishes indexing.",
+    },
 ]
 _EVENT_VALUES = {e["value"] for e in AVAILABLE_EVENTS}
 

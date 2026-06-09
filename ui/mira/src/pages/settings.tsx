@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/select"
 import { useParams } from "react-router"
 
-import { WebhooksCard } from "@/components/settings/webhooks-card"
 import { api } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 
@@ -485,8 +484,6 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       )}
-
-      {section === "webhooks" && <WebhooksCard />}
     </div>
   )
 }
