@@ -15,7 +15,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-import { Separator } from "@/components/ui/separator"
 import {
   Sidebar,
   SidebarContent,
@@ -106,6 +105,7 @@ function AppBreadcrumb() {
 
 export function DashboardLayout() {
   const { user } = useAuth()
+  const location = useLocation()
 
   const visibleNav = navItems.filter(
     (item) => !("adminOnly" in item && item.adminOnly) || user?.is_admin,
@@ -155,16 +155,27 @@ export function DashboardLayout() {
             <SidebarGroupLabel>Navigation</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {visibleNav.map((item) => (
-                  <SidebarMenuItem key={item.to}>
-                    <SidebarMenuButton asChild>
-                      <NavLink to={item.to} end={item.to === "/"}>
-                        <item.icon />
-                        <span>{item.label}</span>
-                      </NavLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                {visibleNav.map((item) => {
+                  const isActive =
+                    item.to === "/"
+                      ? location.pathname === "/"
+                      : location.pathname === item.to ||
+                        location.pathname.startsWith(`${item.to}/`)
+                  return (
+                    <SidebarMenuItem key={item.to}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={isActive}
+                        className="relative before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r-full before:bg-sidebar-primary before:opacity-0 data-[active=true]:before:opacity-100 data-[active=true]:font-semibold"
+                      >
+                        <NavLink to={item.to} end={item.to === "/"}>
+                          <item.icon />
+                          <span>{item.label}</span>
+                        </NavLink>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -185,7 +196,6 @@ export function DashboardLayout() {
       <SidebarInset>
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-2 h-4" />
           <AppBreadcrumb />
         </header>
         <main className="flex-1 overflow-auto">
