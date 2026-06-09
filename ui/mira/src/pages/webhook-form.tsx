@@ -155,8 +155,7 @@ export function WebhookFormPage() {
           {isEdit ? "Edit webhook" : "Add webhook"}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Deliver events to a Slack, Microsoft Teams, or custom HTTPS endpoint.
-          The payload format is detected automatically from the URL.
+          Send events to any HTTPS endpoint when Mira reviews or indexes.
         </p>
       </div>
 
@@ -193,8 +192,9 @@ export function WebhookFormPage() {
                   onChange={(e) => setUrl(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Slack and Microsoft Teams incoming-webhook URLs are
-                  auto-formatted; anything else receives a generic JSON payload.
+                  Any HTTPS endpoint works. Slack and Teams URLs are
+                  auto-formatted; everything else receives a generic JSON
+                  payload.
                 </p>
               </div>
               <label className="flex w-fit items-center gap-2 text-sm">

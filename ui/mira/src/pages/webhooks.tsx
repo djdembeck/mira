@@ -85,8 +85,8 @@ export function WebhooksPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Webhooks</h1>
           <p className="text-sm text-muted-foreground">
-            Send outbound notifications to Slack, Microsoft Teams, or any HTTPS
-            endpoint when Mira reviews a PR or finishes indexing.
+            Send a webhook to any HTTPS endpoint when Mira reviews a PR or
+            finishes indexing. Slack and Teams URLs are auto-formatted.
           </p>
         </div>
         {webhooks.length > 0 && (
@@ -109,8 +109,8 @@ export function WebhooksPage() {
             <div className="space-y-1">
               <p className="text-sm font-medium">No webhooks yet</p>
               <p className="max-w-sm text-sm text-muted-foreground">
-                Add a webhook to get notified in Slack, Microsoft Teams, or your
-                own endpoint when Mira reviews or indexes.
+                Add a webhook to get notified at any endpoint when Mira reviews
+                or indexes.
               </p>
             </div>
             <Button
