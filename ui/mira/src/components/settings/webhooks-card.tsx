@@ -140,7 +140,7 @@ export function WebhooksCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Notifications</CardTitle>
+        <CardTitle>Webhooks</CardTitle>
         <CardDescription>
           Send outbound webhooks when Mira finishes (or fails) a review or
           finishes indexing a repo. Paste a Slack or Microsoft Teams incoming

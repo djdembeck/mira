@@ -198,7 +198,11 @@ export function App() {
           <Route path="learnings" element={<LearnedRulesPage />} />
           <Route path="vulnerabilities" element={<VulnerabilitiesPage />} />
           <Route path="users" element={<UsersPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route
+            path="settings"
+            element={<Navigate to="/settings/models" replace />}
+          />
+          <Route path="settings/:section" element={<SettingsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

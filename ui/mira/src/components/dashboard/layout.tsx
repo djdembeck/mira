@@ -1,4 +1,18 @@
-import { BookOpen, Brain, Database, GitFork, LayoutDashboard, LogOut, Moon, Package, Settings, ShieldAlert, Sun, Users } from "lucide-react"
+import {
+  BookOpen,
+  Brain,
+  ChevronRight,
+  Database,
+  GitFork,
+  LayoutDashboard,
+  LogOut,
+  Moon,
+  Package,
+  Settings,
+  ShieldAlert,
+  Sun,
+  Users,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { NavLink, Outlet, useLocation } from "react-router"
 
@@ -15,6 +29,11 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Separator } from "@/components/ui/separator"
 import {
   Sidebar,
@@ -28,6 +47,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
@@ -42,7 +64,14 @@ const navItems = [
   { to: "/rules", icon: BookOpen, label: "Rules" },
   { to: "/learnings", icon: Brain, label: "Learnings" },
   { to: "/users", icon: Users, label: "Users", adminOnly: true },
-  { to: "/settings", icon: Settings, label: "Settings", adminOnly: true },
+]
+
+// Settings is rendered as a collapsible group (admin-only) with these
+// children rather than a flat nav item.
+const settingsSubItems = [
+  { to: "/settings/models", label: "Models" },
+  { to: "/settings/review", label: "Review" },
+  { to: "/settings/webhooks", label: "Webhooks" },
 ]
 
 const PAGE_LABELS: Record<string, string> = {
@@ -54,6 +83,9 @@ const PAGE_LABELS: Record<string, string> = {
   learnings: "Learnings",
   settings: "Settings",
   users: "Users",
+  models: "Models",
+  review: "Review",
+  webhooks: "Webhooks",
 }
 
 function AppBreadcrumb() {
@@ -72,8 +104,7 @@ function AppBreadcrumb() {
     )
   }
 
-  const label = (part: string) =>
-    PAGE_LABELS[part] || decodeURIComponent(part)
+  const label = (part: string) => PAGE_LABELS[part] || decodeURIComponent(part)
 
   // /repos/{owner}/{repo} doesn't have a real /repos/{owner} route, so the
   // owner segment links back to the repos list with that owner pre-filtered.
@@ -106,10 +137,17 @@ function AppBreadcrumb() {
 
 export function DashboardLayout() {
   const { user } = useAuth()
+  const location = useLocation()
+  const onSettings = location.pathname.startsWith("/settings")
 
   const visibleNav = navItems.filter(
-    (item) => !("adminOnly" in item && item.adminOnly) || user?.is_admin,
+    (item) => !("adminOnly" in item && item.adminOnly) || user?.is_admin
   )
+
+  // Active styling keys off aria-current, which NavLink sets on the active
+  // link — single source of truth, no parallel route-matching here.
+  const navActive =
+    "aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium aria-[current=page]:text-sidebar-accent-foreground"
 
   // Fetch the running Mira version once on mount and render it next to the
   // logo. Falls back silently if the call fails (e.g. older backend without
@@ -133,8 +171,16 @@ export function DashboardLayout() {
               <SidebarMenuButton size="lg" asChild>
                 <a href="/">
                   <div className="flex aspect-square size-8 items-center justify-center">
-                    <img src="/logo.png" alt="Mira" className="hidden size-7 dark:block" />
-                    <img src="/logo-light.png" alt="Mira" className="size-7 dark:hidden" />
+                    <img
+                      src="/logo.png"
+                      alt="Mira"
+                      className="hidden size-7 dark:block"
+                    />
+                    <img
+                      src="/logo-light.png"
+                      alt="Mira"
+                      className="size-7 dark:hidden"
+                    />
                   </div>
                   <div className="flex flex-col leading-tight">
                     <span className="text-sm font-semibold">Mira</span>
@@ -157,7 +203,7 @@ export function DashboardLayout() {
               <SidebarMenu>
                 {visibleNav.map((item) => (
                   <SidebarMenuItem key={item.to}>
-                    <SidebarMenuButton asChild>
+                    <SidebarMenuButton asChild className={navActive}>
                       <NavLink to={item.to} end={item.to === "/"}>
                         <item.icon />
                         <span>{item.label}</span>
@@ -165,6 +211,40 @@ export function DashboardLayout() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
+
+                {user?.is_admin && (
+                  <Collapsible
+                    asChild
+                    defaultOpen={onSettings}
+                    className="group/collapsible"
+                  >
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton>
+                          <Settings />
+                          <span>Settings</span>
+                          <ChevronRight className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {settingsSubItems.map((sub) => (
+                            <SidebarMenuSubItem key={sub.to}>
+                              <SidebarMenuSubButton
+                                asChild
+                                className={navActive}
+                              >
+                                <NavLink to={sub.to}>
+                                  <span>{sub.label}</span>
+                                </NavLink>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </SidebarMenuItem>
+                  </Collapsible>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -234,11 +314,7 @@ function ThemeToggle() {
 
   return (
     <SidebarMenuButton size="sm" onClick={next}>
-      {isDark ? (
-        <Moon className="h-4 w-4" />
-      ) : (
-        <Sun className="h-4 w-4" />
-      )}
+      {isDark ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
       <span className="text-xs">{isDark ? "Dark" : "Light"}</span>
     </SidebarMenuButton>
   )
