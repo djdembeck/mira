@@ -474,6 +474,20 @@ class AppDatabase:
             with self._pg_conn.cursor() as cur:
                 cur.execute("UPDATE users SET theme = %s WHERE id = %s", (theme, user_id))
 
+    def update_password(self, user_id: int, new_password: str) -> None:
+        """Set a user's password to a new value (already-verified by caller)."""
+        pw_hash = _hash_password(new_password)
+        if self._backend == "sqlite":
+            assert self._sqlite_conn is not None
+            self._sqlite_conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?", (pw_hash, user_id)
+            )
+            self._sqlite_conn.commit()
+        else:
+            assert self._pg_conn is not None
+            with self._pg_conn.cursor() as cur:
+                cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (pw_hash, user_id))
+
     def record_login(self, user_id: int) -> None:
         """Stamp a user's last-login time (called on each successful login)."""
         now = time.time()

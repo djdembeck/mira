@@ -43,6 +43,15 @@ class CreateUserRequest(BaseModel):
     is_admin: bool = False
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+
+
 def create_auth_router(db: AppDatabase) -> APIRouter:
     router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -102,6 +111,19 @@ def create_auth_router(db: AppDatabase) -> APIRouter:
         db.set_user_theme(user.id, body.theme)
         return {"ok": True, "theme": body.theme}
 
+    @router.post("/change-password")
+    def change_password(body: ChangePasswordRequest, request: Request) -> dict:
+        user = getattr(request.state, "user", None)
+        if not user:
+            return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+        if not body.new_password:
+            return JSONResponse(status_code=400, content={"error": "New password cannot be empty"})
+        # Re-verify the current password before allowing a change.
+        if db.authenticate(user.username, body.current_password) is None:
+            return JSONResponse(status_code=400, content={"error": "Current password is incorrect"})
+        db.update_password(user.id, body.new_password)
+        return {"ok": True}
+
     # ── User management (admin only) ──
 
     @router.get("/users", response_model=list[UserResponse])
@@ -138,6 +160,16 @@ def create_auth_router(db: AppDatabase) -> APIRouter:
         if user_id == user.id:
             return JSONResponse(status_code=400, content={"error": "Cannot delete yourself"})
         db.delete_user(user_id)
+        return {"ok": True}
+
+    @router.post("/users/{user_id}/password")
+    def reset_user_password(user_id: int, body: ResetPasswordRequest, request: Request) -> dict:
+        user = getattr(request.state, "user", None)
+        if not user or not user.is_admin:
+            return JSONResponse(status_code=403, content={"error": "Admin access required"})
+        if not body.new_password:
+            return JSONResponse(status_code=400, content={"error": "New password cannot be empty"})
+        db.update_password(user_id, body.new_password)
         return {"ok": True}
 
     return router

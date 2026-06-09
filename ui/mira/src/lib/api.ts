@@ -554,6 +554,19 @@ export const api = {
 
   deleteUser: (id: number) => deleteJson(`/api/auth/users/${id}`),
 
+  // Change the logged-in user's own password (verifies the current one).
+  changePassword: (current_password: string, new_password: string) =>
+    postJson<{ ok: boolean }>("/api/auth/change-password", {
+      current_password,
+      new_password,
+    }),
+
+  // Admin: set a new password for any user (no current password needed).
+  resetUserPassword: (id: number, new_password: string) =>
+    postJson<{ ok: boolean }>(`/api/auth/users/${id}/password`, {
+      new_password,
+    }),
+
   // Global rules
   listGlobalRules: () => fetchJson<RuleModel[]>("/api/rules/global"),
 

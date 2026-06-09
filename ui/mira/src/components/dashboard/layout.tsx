@@ -4,6 +4,7 @@ import {
   ChevronsUpDown,
   Database,
   GitFork,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Moon,
@@ -52,7 +53,9 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { SetPasswordDialog } from "@/components/ui/set-password-dialog"
 import { UserAvatar } from "@/components/ui/user-avatar"
+import { api } from "@/lib/api"
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -233,6 +236,7 @@ export function DashboardLayout() {
 function UserMenu() {
   const { user, logout } = useAuth()
   const { theme, setTheme } = useTheme()
+  const [showPassword, setShowPassword] = useState(false)
   if (!user) return null
 
   const isDark =
@@ -271,6 +275,12 @@ function UserMenu() {
             {isDark ? <Sun /> : <Moon />}
             {isDark ? "Light mode" : "Dark mode"}
           </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => setShowPassword(true)}
+            className="gap-2 py-1 text-xs [&_svg]:size-3.5"
+          >
+            <KeyRound /> Change password
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"
@@ -281,6 +291,17 @@ function UserMenu() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <SetPasswordDialog
+        open={showPassword}
+        onOpenChange={setShowPassword}
+        title="Change password"
+        requireCurrent
+        submitLabel="Update password"
+        onSubmit={async (current, next) => {
+          await api.changePassword(current, next)
+        }}
+      />
     </SidebarMenuItem>
   )
 }

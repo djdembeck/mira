@@ -1,4 +1,4 @@
-import { Plus, Trash2, Users as UsersIcon } from "lucide-react"
+import { KeyRound, Plus, Trash2, Users as UsersIcon } from "lucide-react"
 import { useState } from "react"
 import { useNavigate } from "react-router"
 
@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ConfirmButton } from "@/components/ui/confirm-button"
-import { UserAvatar } from "@/components/ui/user-avatar"
+import { SetPasswordDialog } from "@/components/ui/set-password-dialog"
 import {
   Table,
   TableBody,
@@ -15,6 +15,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { UserAvatar } from "@/components/ui/user-avatar"
 import { api } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
 import { useAsync } from "@/lib/hooks"
@@ -39,6 +45,10 @@ export function UsersPage() {
   const navigate = useNavigate()
   const [refreshKey, setRefreshKey] = useState(0)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [resetUser, setResetUser] = useState<{
+    id: number
+    username: string
+  } | null>(null)
   const { data: users, loading } = useAsync(() => api.listUsers(), [refreshKey])
 
   if (!currentUser?.is_admin) {
@@ -139,20 +149,36 @@ export function UsersPage() {
                     {lastSeen(u.last_login_at)}
                   </TableCell>
                   <TableCell className="text-right">
-                    {u.id !== currentUser.id && (
-                      <ConfirmButton
-                        variant="ghost"
-                        size="icon-sm"
-                        tooltip="Delete"
-                        dialogTitle="Delete user?"
-                        dialogDescription={`"${u.username}" will lose dashboard access. This can't be undone.`}
-                        confirmLabel="Delete"
-                        destructive
-                        onConfirm={() => remove(u.id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      </ConfirmButton>
-                    )}
+                    <div className="flex items-center justify-end gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() =>
+                              setResetUser({ id: u.id, username: u.username })
+                            }
+                          >
+                            <KeyRound className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Reset password</TooltipContent>
+                      </Tooltip>
+                      {u.id !== currentUser.id && (
+                        <ConfirmButton
+                          variant="ghost"
+                          size="icon-sm"
+                          tooltip="Delete"
+                          dialogTitle="Delete user?"
+                          dialogDescription={`"${u.username}" will lose dashboard access. This can't be undone.`}
+                          confirmLabel="Delete"
+                          destructive
+                          onConfirm={() => remove(u.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </ConfirmButton>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -164,6 +190,21 @@ export function UsersPage() {
       {deleteError && (
         <p className="text-sm break-words text-destructive">{deleteError}</p>
       )}
+
+      <SetPasswordDialog
+        open={resetUser !== null}
+        onOpenChange={(open) => !open && setResetUser(null)}
+        title="Reset password"
+        description={
+          resetUser
+            ? `Set a new password for "${resetUser.username}".`
+            : undefined
+        }
+        submitLabel="Reset password"
+        onSubmit={async (_current, next) => {
+          if (resetUser) await api.resetUserPassword(resetUser.id, next)
+        }}
+      />
     </div>
   )
 }
