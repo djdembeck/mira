@@ -1,9 +1,8 @@
-import { AlertTriangle, ArrowDown, ArrowUp, ExternalLink, RefreshCw, Search } from "lucide-react"
+import { ArrowDown, ArrowUp, RefreshCw, Search } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useNavigate } from "react-router"
 import { BarGauge } from "@/components/dashboard/bar-gauge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -18,7 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { type Column, useDataTable } from "@/components/ui/use-data-table"
 import { useAuth } from "@/lib/auth"
-import { api, type OpenPr, type ReviewerStat } from "@/lib/api"
+import { api, type ReviewerStat } from "@/lib/api"
 import { useAsync } from "@/lib/hooks"
 
 // ── formatting helpers ──
@@ -89,19 +88,6 @@ function StatCard({
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
-  if (status === "changes_requested") return <Badge variant="destructive">Changes requested</Badge>
-  if (status === "approved") {
-    return (
-      <Badge className="border-transparent bg-emerald-600/15 text-emerald-700 dark:text-emerald-400">
-        Approved
-      </Badge>
-    )
-  }
-  if (status === "commented") return <Badge variant="secondary">Commented</Badge>
-  return <Badge variant="outline">Awaiting review</Badge>
-}
-
 function ReviewerCell({ login, avatar }: { login: string; avatar: string }) {
   return (
     <div className="flex items-center gap-3">
@@ -157,7 +143,11 @@ function ReviewersCard() {
       align: "right",
       sortable: true,
       sortValue: (r) => r.median_response_secs,
-      cell: (r) => <span className="tabular-nums">{fmtDuration(r.median_response_secs)}</span>,
+      cell: (r) => (
+        <span className="tabular-nums">
+          {r.median_response_secs == null ? "—" : `~${fmtDuration(r.median_response_secs)}`}
+        </span>
+      ),
     },
     {
       key: "reviews",
@@ -211,137 +201,10 @@ function ReviewersCard() {
               emptyMessage="No review activity yet."
             />
             <DataTablePagination table={table} />
-          </>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-// ── Open PRs (stale + status board) ──
-
-function OpenPrsCard() {
-  const [staleOnly, setStaleOnly] = useState(false)
-  const { data, loading, error } = useAsync(() => api.getOpenPrs(3), [])
-
-  const rows = (data ?? []).filter((p) => !staleOnly || p.stale)
-
-  const columns: Column<OpenPr>[] = [
-    {
-      key: "title",
-      header: "Pull request",
-      sortable: true,
-      sortValue: (p) => p.title.toLowerCase(),
-      cell: (p) => (
-        <div className="min-w-0">
-          <a
-            href={p.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 font-medium hover:underline"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <span className="truncate">{p.title || `PR #${p.number}`}</span>
-            <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-          </a>
-          <p className="text-xs text-muted-foreground">
-            {p.repo} #{p.number} · by {p.author}
-            {p.draft && " · draft"}
-          </p>
-        </div>
-      ),
-    },
-    {
-      key: "status",
-      header: "Status",
-      sortable: true,
-      sortValue: (p) => p.status,
-      cell: (p) => <StatusBadge status={p.status} />,
-    },
-    {
-      key: "waiting_on",
-      header: "Waiting on",
-      cell: (p) =>
-        p.waiting_on.length ? (
-          <span className="text-sm">{p.waiting_on.join(", ")}</span>
-        ) : (
-          <span className="text-sm text-muted-foreground">—</span>
-        ),
-    },
-    {
-      key: "age_secs",
-      header: "Age",
-      align: "right",
-      sortable: true,
-      sortValue: (p) => p.age_secs,
-      cell: (p) => <span className="tabular-nums">{fmtDuration(p.age_secs)}</span>,
-    },
-    {
-      key: "idle_secs",
-      header: "Idle",
-      align: "right",
-      sortable: true,
-      sortValue: (p) => p.idle_secs,
-      cell: (p) => (
-        <span className="inline-flex items-center justify-end gap-1.5 tabular-nums">
-          {p.stale && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
-          {fmtDuration(p.idle_secs)}
-        </span>
-      ),
-    },
-  ]
-
-  const table = useDataTable({
-    rows,
-    columns,
-    initialSort: { key: "age_secs", dir: "desc" },
-    pageSize: 10,
-  })
-
-  const staleCount = (data ?? []).filter((p) => p.stale).length
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <CardTitle>Open pull requests</CardTitle>
-            <CardDescription>
-              How long PRs have been open and sitting idle, and who they&apos;re waiting on
-            </CardDescription>
-          </div>
-          <div className="flex gap-1">
-            {(["all", "stale"] as const).map((mode) => {
-              const active = (mode === "stale") === staleOnly
-              return (
-                <button
-                  key={mode}
-                  onClick={() => setStaleOnly(mode === "stale")}
-                  className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium ${
-                    active
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-input bg-background text-muted-foreground hover:bg-accent"
-                  }`}
-                >
-                  {mode === "all" ? "All open" : `Stale (${staleCount})`}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {error ? (
-          <p className="text-sm text-destructive">{error}</p>
-        ) : (
-          <>
-            <DataTable
-              table={table}
-              rowKey={(p) => `${p.owner}/${p.repo}#${p.number}`}
-              loading={loading}
-              emptyMessage={staleOnly ? "No stale PRs — nice." : "No open PRs."}
-            />
-            <DataTablePagination table={table} />
+            <p className="text-xs text-muted-foreground">
+              ~ Median response is approximate for backfilled PRs (request time estimated from PR
+              creation); it sharpens as live review events come in.
+            </p>
           </>
         )}
       </CardContent>
@@ -439,7 +302,6 @@ export function ContributorsPage() {
       </div>
 
       <ReviewersCard />
-      <OpenPrsCard />
     </div>
   )
 }

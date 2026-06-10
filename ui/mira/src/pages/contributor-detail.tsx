@@ -108,7 +108,12 @@ export function ContributorDetailPage() {
         </p>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <Stat label="Pending reviews" value={me?.pending ?? 0} />
-          <Stat label="Median response" value={fmtDuration(me?.median_response_secs ?? null)} />
+          <Stat
+            label="Median response"
+            value={
+              me?.median_response_secs == null ? "—" : `~${fmtDuration(me.median_response_secs)}`
+            }
+          />
           <Stat label="Reviews given (30d)" value={me?.reviews ?? 0} />
           <Stat label="Reviews given (all time)" value={c.reviews.toLocaleString()} />
         </div>
