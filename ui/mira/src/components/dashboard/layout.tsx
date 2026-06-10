@@ -1,4 +1,4 @@
-import { BookOpen, Brain, Database, GitFork, LayoutDashboard, LogOut, Moon, Package, Settings, ShieldAlert, Sun, Users } from "lucide-react"
+import { BookOpen, Brain, Database, GitFork, LayoutDashboard, LogOut, Moon, Package, Settings, ShieldAlert, Sun, Users, Users2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { NavLink, Outlet, useLocation } from "react-router"
 
@@ -35,6 +35,7 @@ import {
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/repos", icon: Database, label: "Repositories" },
+  { to: "/contributors", icon: Users2, label: "Contributors", adminOnly: true },
   { to: "/packages", icon: Package, label: "Packages" },
   { to: "/vulnerabilities", icon: ShieldAlert, label: "Vulnerabilities" },
   { to: "/relationships", icon: GitFork, label: "Relationships" },
@@ -46,6 +47,7 @@ const navItems = [
 
 const PAGE_LABELS: Record<string, string> = {
   repos: "Repositories",
+  contributors: "Contributors",
   packages: "Packages",
   vulnerabilities: "Vulnerabilities",
   relationships: "Relationships",

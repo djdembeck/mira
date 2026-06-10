@@ -22,6 +22,50 @@ def _get_app_db():
     return _app_db
 
 
+def _record_push_commits(payload: dict[str, Any]) -> None:
+    """Record per-commit contributions from a push to the default branch.
+
+    Mirrors GitHub's contribution graph (default-branch commits). Keyed on
+    commit:<sha> so the same commit arriving via push and later via backfill
+    is counted once. Best-effort — never breaks the indexing path.
+    """
+    import time
+    from datetime import datetime
+
+    try:
+        repository = payload.get("repository", {})
+        default_branch = repository.get("default_branch", "main")
+        if payload.get("ref", "") != f"refs/heads/{default_branch}":
+            return
+        owner = repository["owner"]["login"]
+        repo = repository["name"]
+        app_db = _get_app_db()
+        for commit in payload.get("commits", []):
+            sha = commit.get("id") or ""
+            author = commit.get("author") or {}
+            login = author.get("username") or ""
+            if not sha or not login:
+                # No GitHub login (only an email) → can't attribute; skip.
+                continue
+            ts = commit.get("timestamp") or ""
+            try:
+                event_at = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                event_at = time.time()
+            app_db.record_contribution_for_login(
+                "github",
+                login,
+                owner,
+                repo,
+                "commit",
+                f"commit:{sha}",
+                event_at=event_at,
+                title=(commit.get("message") or "").split("\n", 1)[0][:200],
+            )
+    except Exception as exc:
+        logger.debug("Failed to record push commits: %s", exc)
+
+
 async def _count_files_for_repos(
     app_auth: GitHubAppAuth,
     installation_id: int,
@@ -92,6 +136,7 @@ async def handle_installation(
         import asyncio
 
         asyncio.create_task(_count_files_for_repos(app_auth, installation_id, repos))
+        _schedule_contributor_backfill(app_auth, installation_id, repos)
 
         # Notify connected clients
         from mira.dashboard.events import bus
@@ -182,6 +227,7 @@ async def handle_repos_added(
         import asyncio
 
         asyncio.create_task(_count_files_for_repos(app_auth, installation_id, repos))
+        _schedule_contributor_backfill(app_auth, installation_id, repos)
 
         from mira.dashboard.events import bus
 
@@ -194,6 +240,36 @@ async def handle_repos_added(
         )
     except Exception:
         logger.exception("Error registering repos_added")
+
+
+def _schedule_contributor_backfill(
+    app_auth: GitHubAppAuth, installation_id: int, repos: list[dict[str, Any]]
+) -> None:
+    """Kick off a one-time historical contributor backfill for newly added
+    repos. Runs in the background, one repo at a time to spare the API budget."""
+    import asyncio
+
+    from mira.github_app.contributor_backfill import backfill_repo_contributions
+
+    pairs: list[tuple[str, str]] = []
+    for repo_info in repos:
+        full_name = repo_info.get("full_name", "")
+        if "/" in full_name:
+            owner, repo = full_name.split("/", 1)
+            pairs.append((owner, repo))
+    if not pairs:
+        return
+
+    async def _run() -> None:
+        for owner, repo in pairs:
+            try:
+                await backfill_repo_contributions(
+                    owner, repo, app_auth, installation_id=installation_id
+                )
+            except Exception:
+                logger.exception("Auto-backfill failed for %s/%s", owner, repo)
+
+    asyncio.create_task(_run())
 
 
 _INCREMENTAL_FILE_CAP = 50  # Above this, queue a full re-index instead
@@ -217,6 +293,10 @@ async def handle_push_index(
         owner = payload["repository"]["owner"]["login"]
         repo_name = payload["repository"]["name"]
         default_branch = payload.get("repository", {}).get("default_branch", "main")
+
+        # Record commit contributions first — independent of index status, so
+        # contributor analytics covers repos that aren't indexed for review.
+        _record_push_commits(payload)
 
         # Check repo status — only re-index repos that are already indexed
         app_db = _get_app_db()

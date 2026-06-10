@@ -261,6 +261,63 @@ async function patchJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// ── Contributors ──
+
+export interface ContributorListItem {
+  id: number
+  provider: string
+  login: string
+  display_name: string
+  avatar_url: string
+  is_bot: boolean
+  prs_opened: number
+  prs_merged: number
+  commits: number
+  reviews: number
+  additions: number
+  deletions: number
+  last_active: number | null
+  repos_touched: number
+}
+
+export interface HeatmapDay {
+  day: string
+  total: number
+  commits: number
+  prs_opened: number
+  prs_merged: number
+  reviews: number
+}
+
+export interface ContributorRepoBreakdown {
+  owner: string
+  repo: string
+  commits: number
+  prs_opened: number
+  prs_merged: number
+  reviews: number
+}
+
+export interface ReviewQuality {
+  reviews: number
+  blockers: number
+  warnings: number
+  suggestions: number
+  feedback_accepted: number
+  feedback_rejected: number
+  accept_rate: number
+}
+
+export interface ContributorDetail {
+  contributor: ContributorListItem
+  heatmap: HeatmapDay[]
+  repos: ContributorRepoBreakdown[]
+  quality: ReviewQuality
+}
+
+export type ContributorSort = "commits" | "prs" | "reviews" | "recent" | "additions"
+export type StatsPeriod = "day" | "week" | "month"
+
 // ── API functions ──
 
 export const api = {
@@ -522,4 +579,23 @@ export const api = {
 
   deleteRepoRule: (owner: string, repo: string, id: number) =>
     deleteJson(`/api/repos/${owner}/${repo}/rules/${id}`),
+
+  // Contributors
+  listContributors: (sort: ContributorSort = "commits", period?: StatsPeriod, includeBots = false) => {
+    const params = new URLSearchParams({ sort })
+    if (period) params.set("period", period)
+    if (includeBots) params.set("include_bots", "true")
+    return fetchJson<ContributorListItem[]>(`/api/contributors?${params.toString()}`)
+  },
+
+  getContributor: (login: string, period?: StatsPeriod) => {
+    const qs = period ? `?period=${period}` : ""
+    return fetchJson<ContributorDetail>(`/api/contributors/${encodeURIComponent(login)}${qs}`)
+  },
+
+  refreshContributors: () =>
+    postJson<{ status: string }>("/api/contributors/refresh", {}),
+
+  refreshContributorsRepo: (owner: string, repo: string) =>
+    postJson<{ status: string }>(`/api/contributors/${owner}/${repo}/refresh`, {}),
 }

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import sys
+from datetime import UTC
 
 import click
 
@@ -332,3 +333,87 @@ def serve(
 
     click.echo(f"Starting Mira webhook server on {host}:{port}")
     uvicorn.run(app, host=host, port=port)
+
+
+@main.command("backfill-contributors")
+@click.option(
+    "--repo",
+    "repo_spec",
+    default=None,
+    help="owner/repo to backfill. Omit to backfill every registered repo.",
+)
+@click.option("--app-id", envvar="MIRA_GITHUB_APP_ID", required=True, help="GitHub App ID")
+@click.option(
+    "--private-key",
+    envvar="MIRA_GITHUB_PRIVATE_KEY",
+    required=True,
+    help="PEM contents or @path/to/key.pem",
+)
+@click.option(
+    "--since",
+    default=None,
+    help="Only events on/after this ISO date (e.g. 2024-01-01). Enables an incremental top-up.",
+)
+@click.option(
+    "--no-commits",
+    is_flag=True,
+    help="Skip the per-commit phase (much lighter on the GitHub API).",
+)
+@click.option("--verbose", is_flag=True, help="Enable verbose logging")
+def backfill_contributors(
+    repo_spec: str | None,
+    app_id: str,
+    private_key: str,
+    since: str | None,
+    no_commits: bool,
+    verbose: bool,
+) -> None:
+    """Backfill historical contributor activity (PRs, reviews, commits) from GitHub."""
+    import asyncio
+    from datetime import datetime
+
+    from mira.github_app.auth import GitHubAppAuth
+    from mira.github_app.contributor_backfill import (
+        backfill_all_repos,
+        backfill_repo_contributions,
+    )
+
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(name)s %(levelname)s: %(message)s",
+        stream=sys.stdout,
+    )
+
+    if private_key.startswith("@"):
+        key_path = private_key[1:]
+        try:
+            with open(key_path) as f:
+                private_key = f.read()
+        except FileNotFoundError:
+            raise click.ClickException(f"Private key file not found: {key_path}") from None
+
+    app_auth = GitHubAppAuth(app_id=app_id, private_key=private_key)
+
+    since_epoch: float | None = None
+    if since:
+        try:
+            since_epoch = datetime.fromisoformat(since).replace(tzinfo=UTC).timestamp()
+        except ValueError:
+            raise click.ClickException("--since must be an ISO date, e.g. 2024-01-01") from None
+
+    include_commits = not no_commits
+    if repo_spec:
+        if "/" not in repo_spec:
+            raise click.UsageError("--repo must be in the form owner/repo")
+        owner, repo = repo_spec.split("/", 1)
+        counts = asyncio.run(
+            backfill_repo_contributions(
+                owner, repo, app_auth, since=since_epoch, include_commits=include_commits
+            )
+        )
+        click.echo(f"Backfilled {owner}/{repo}: {counts}")
+    else:
+        totals = asyncio.run(
+            backfill_all_repos(app_auth, since=since_epoch, include_commits=include_commits)
+        )
+        click.echo(f"Backfill complete: {totals}")

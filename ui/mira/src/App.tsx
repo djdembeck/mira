@@ -6,6 +6,8 @@ import { SetupModal } from "@/components/dashboard/setup-modal"
 import { UninstallModal } from "@/components/dashboard/uninstall-modal"
 import { api } from "@/lib/api"
 import { useAuth } from "@/lib/auth"
+import { ContributorDetailPage } from "@/pages/contributor-detail"
+import { ContributorsPage } from "@/pages/contributors"
 import { DashboardPage } from "@/pages/dashboard"
 import { LearnedRulesPage } from "@/pages/learned-rules"
 import { LoginPage } from "@/pages/login"
@@ -192,6 +194,8 @@ export function App() {
           <Route index element={<DashboardPage />} />
           <Route path="repos" element={<ReposPage />} />
           <Route path="repos/:owner/:repo" element={<RepoDetailPage />} />
+          <Route path="contributors" element={<ContributorsPage />} />
+          <Route path="contributors/:login" element={<ContributorDetailPage />} />
           <Route path="packages" element={<PackagesPage />} />
           <Route path="relationships" element={<RelationshipsPage />} />
           <Route path="rules" element={<RulesPage />} />

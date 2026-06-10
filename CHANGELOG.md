@@ -4,6 +4,12 @@ All notable changes to Mira are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Contributors analytics** — a new org-wide **Contributors** dashboard page showing who contributes across your repositories and how much: PRs opened/merged, commits, reviews given, plus a GitHub-style year-long contribution heatmap on each contributor's detail page. Each contributor also gets Mira's differentiated **review-quality** signal — how many blockers/warnings their PRs triggered and the accept rate of Mira's feedback. Contribution data is recorded live from webhooks (PRs, merges, pushes) and can be backfilled from the GitHub API on repo add, via the admin **Refresh from GitHub** button, or with the new `mira backfill-contributors` CLI command. Contributors are keyed provider-agnostically `(provider, login)` so non-GitHub providers can be added later.
+
 ## [0.2.2] — 2026-06-03
 
 ### Added

@@ -181,6 +181,7 @@ class GitHubProvider(BaseProvider):
                 owner=owner,
                 repo=repo,
                 head_sha=pr.head.sha or "",
+                author=(pr.user.login if pr.user else ""),
             )
 
         try:

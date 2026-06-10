@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import re
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,71 @@ logger = logging.getLogger(__name__)
 def _open_store(owner: str, repo: str) -> IndexStore:
     """Open an IndexStore for the given owner/repo."""
     return IndexStore.open(owner, repo)
+
+
+def _parse_iso(ts: str) -> float:
+    """GitHub ISO-8601 timestamp ('...Z') → epoch seconds. Falls back to now."""
+    if not ts:
+        return time.time()
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return time.time()
+
+
+def _is_bot_user(user: dict[str, Any]) -> bool:
+    """Whether a GitHub user object is a bot account."""
+    login = user.get("login") or ""
+    return user.get("type") == "Bot" or login.endswith("[bot]")
+
+
+def _record_pr_contribution(payload: dict[str, Any], kind: str) -> None:
+    """Record a pr_opened / pr_merged contribution from a pull_request payload.
+
+    Idempotent (keyed on pr/prm:<number>) so a `synchronize` re-fire or a
+    backfill that overlaps this webhook never double-counts. Best-effort —
+    swallows errors so analytics never breaks the review path.
+    """
+    try:
+        pr = payload.get("pull_request", {})
+        user = pr.get("user") or {}
+        login = user.get("login") or ""
+        if not login:
+            return
+        owner = payload["repository"]["owner"]["login"]
+        repo = payload["repository"]["name"]
+        number = pr["number"]
+        if kind == "pr_merged":
+            external_key = f"prm:{number}"
+            event_at = _parse_iso(pr.get("merged_at") or "")
+            merged = True
+        else:
+            external_key = f"pr:{number}"
+            event_at = _parse_iso(pr.get("created_at") or "")
+            merged = False
+
+        from mira.dashboard.api import _app_db
+
+        _app_db.record_contribution_for_login(
+            "github",
+            login,
+            owner,
+            repo,
+            kind,
+            external_key,
+            event_at=event_at,
+            external_id=int(user.get("id") or 0),
+            avatar_url=user.get("avatar_url") or "",
+            is_bot=_is_bot_user(user),
+            pr_number=number,
+            title=pr.get("title") or "",
+            additions=int(pr.get("additions") or 0),
+            deletions=int(pr.get("deletions") or 0),
+            changed_files=int(pr.get("changed_files") or 0),
+            merged=merged,
+        )
+    except Exception as exc:  # never let analytics break the webhook
+        logger.debug("Failed to record %s contribution: %s", kind, exc)
 
 
 _REVIEW_KEYWORDS = {"review", "review this", "review this pr"}
@@ -108,6 +175,10 @@ async def handle_pull_request(
         # Keep visibility current — the blast-radius filter relies on it to
         # avoid naming private repos in a public repo's review.
         _app_db.set_repo_visibility(owner, repo, bool(payload["repository"].get("private", False)))
+
+        # Record the authoring contribution before review so it lands even if
+        # the review itself fails. Idempotent on every synchronize re-fire.
+        _record_pr_contribution(payload, "pr_opened")
 
         repo_record = _app_db.get_repo(owner, repo)
         is_indexed = bool(repo_record and repo_record.status == "ready")
@@ -532,6 +603,10 @@ async def handle_pr_merged(
         repo = payload["repository"]["name"]
         number = pr["number"]
         pr_url = f"https://github.com/{owner}/{repo}/pull/{number}"
+        pr_author = (pr.get("user") or {}).get("login", "")
+
+        # Record the merge contribution (idempotent on prm:<number>).
+        _record_pr_contribution(payload, "pr_merged")
 
         token = await app_auth.get_installation_token(installation_id)
         provider = create_provider("github", token)
@@ -595,6 +670,7 @@ async def handle_pr_merged(
                         "comment_title": meta["title"],
                         "signal": "accepted",
                         "actor": merged_by,
+                        "pr_author": pr_author,
                     }
                 )
 
@@ -621,6 +697,7 @@ async def handle_pr_merged(
                         "comment_title": body[:2000],
                         "signal": "human_review",
                         "actor": hc.author,
+                        "pr_author": pr_author,
                     }
                 )
 

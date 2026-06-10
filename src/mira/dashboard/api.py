@@ -1687,6 +1687,223 @@ def _period_to_since(period: str) -> float | None:
     return None
 
 
+# ── Contributors ───────────────────────────────────────────────────
+
+
+class ContributorListItem(BaseModel):
+    id: int
+    provider: str
+    login: str
+    display_name: str = ""
+    avatar_url: str = ""
+    is_bot: bool = False
+    prs_opened: int = 0
+    prs_merged: int = 0
+    commits: int = 0
+    reviews: int = 0
+    additions: int = 0
+    deletions: int = 0
+    last_active: float | None = None
+    repos_touched: int = 0
+
+
+class HeatmapDay(BaseModel):
+    day: str
+    total: int = 0
+    commits: int = 0
+    prs_opened: int = 0
+    prs_merged: int = 0
+    reviews: int = 0
+
+
+class ContributorRepoBreakdown(BaseModel):
+    owner: str
+    repo: str
+    commits: int = 0
+    prs_opened: int = 0
+    prs_merged: int = 0
+    reviews: int = 0
+
+
+class ReviewQuality(BaseModel):
+    """Mira's differentiated signal: how much review attention a person's PRs
+    drew, plus how often Mira's feedback on them was accepted."""
+
+    reviews: int = 0
+    blockers: int = 0
+    warnings: int = 0
+    suggestions: int = 0
+    feedback_accepted: int = 0
+    feedback_rejected: int = 0
+    accept_rate: float = 0.0
+
+
+class ContributorDetailModel(BaseModel):
+    contributor: ContributorListItem
+    heatmap: list[HeatmapDay]
+    repos: list[ContributorRepoBreakdown]
+    quality: ReviewQuality
+
+
+def _require_admin(request: Request) -> None:
+    """Raise 403 unless the request is from an authenticated admin."""
+    user = getattr(request.state, "user", None)
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+def _build_app_auth():  # type: ignore[no-untyped-def]
+    """Construct GitHubAppAuth from env, or 400 if the App isn't configured."""
+    app_id = os.environ.get("MIRA_GITHUB_APP_ID", "")
+    private_key = os.environ.get("MIRA_GITHUB_PRIVATE_KEY", "")
+    if not app_id or not private_key:
+        raise HTTPException(status_code=400, detail="GitHub App not configured")
+    from mira.github_app.auth import GitHubAppAuth
+
+    return GitHubAppAuth(app_id=app_id, private_key=private_key)
+
+
+@router.get("/api/contributors", response_model=list[ContributorListItem])
+def list_contributors(
+    request: Request, sort: str = "commits", period: str = "", include_bots: bool = False
+) -> list[ContributorListItem]:
+    """Cross-repo contributor leaderboard (admin only). sort: commits|prs|reviews|recent|additions."""
+    _require_admin(request)
+    since = _period_to_since(period) if period else None
+    rows = _app_db.list_contributors(sort=sort, since=since, include_bots=include_bots)
+    return [ContributorListItem(**r) for r in rows]
+
+
+@router.get("/api/contributors/backfill/status")
+def contributors_backfill_status(request: Request) -> list[dict]:
+    """Per-repo backfill progress blobs (status/prs_done/total/error). Admin only."""
+    _require_admin(request)
+    from mira.github_app.contributor_backfill import get_backfill_status
+
+    out: list[dict] = []
+    for rec in _app_db.list_repos():
+        status = get_backfill_status(_app_db, rec.owner, rec.repo)
+        if status:
+            out.append({"owner": rec.owner, "repo": rec.repo, **status})
+    return out
+
+
+@router.post("/api/contributors/refresh")
+async def refresh_contributors(request: Request, include_commits: bool = True) -> dict:
+    """Kick off a background backfill of every repo (admin only)."""
+    _require_admin(request)
+    auth = _build_app_auth()
+    from mira.github_app.contributor_backfill import backfill_all_repos
+
+    asyncio.create_task(backfill_all_repos(auth, include_commits=include_commits))
+    return {"status": "refreshing"}
+
+
+@router.post("/api/contributors/{owner}/{repo}/refresh")
+async def refresh_contributors_repo(
+    owner: str, repo: str, request: Request, include_commits: bool = True
+) -> dict:
+    """Kick off a background backfill of one repo (admin only)."""
+    _require_admin(request)
+    rec = _app_db.get_repo(owner, repo)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Repo {owner}/{repo} not found")
+    auth = _build_app_auth()
+    from mira.github_app.contributor_backfill import backfill_repo_contributions
+
+    asyncio.create_task(
+        backfill_repo_contributions(
+            owner, repo, auth, installation_id=rec.installation_id, include_commits=include_commits
+        )
+    )
+    return {"status": "refreshing"}
+
+
+@router.get("/api/contributors/{login}", response_model=ContributorDetailModel)
+def get_contributor(login: str, request: Request, period: str = "") -> ContributorDetailModel:
+    """One contributor's aggregated stats, 365-day heatmap, per-repo breakdown,
+    and Mira review-quality signal (the quality fan-out mirrors /api/stats). Admin only."""
+    _require_admin(request)
+    contributor = _app_db.get_contributor_by_login("github", login)
+    if contributor is None:
+        raise HTTPException(status_code=404, detail=f"Contributor {login} not found")
+    since = _period_to_since(period) if period else None
+
+    totals = _app_db.get_contributor_totals(contributor.id, since=since)
+    item = ContributorListItem(
+        id=contributor.id,
+        provider=contributor.provider,
+        login=contributor.external_login,
+        display_name=contributor.display_name,
+        avatar_url=contributor.avatar_url,
+        is_bot=contributor.is_bot,
+        last_active=totals["last_active"],
+        repos_touched=totals["repos_touched"],
+        prs_opened=totals["prs_opened"],
+        prs_merged=totals["prs_merged"],
+        commits=totals["commits"],
+        reviews=totals["reviews"],
+        additions=totals["additions"],
+        deletions=totals["deletions"],
+    )
+
+    # 365-day heatmap window ending today (UTC).
+    today = datetime.now(tz=UTC).date()
+    start_day = (today - timedelta(days=364)).strftime("%Y-%m-%d")
+    end_day = today.strftime("%Y-%m-%d")
+    heatmap = [
+        HeatmapDay(
+            day=d.day,
+            total=d.total,
+            commits=d.commits,
+            prs_opened=d.prs_opened,
+            prs_merged=d.prs_merged,
+            reviews=d.reviews,
+        )
+        for d in _app_db.get_contributor_days(contributor.id, start_day, end_day)
+    ]
+
+    repos = [
+        ContributorRepoBreakdown(**b)
+        for b in _app_db.get_contributor_repo_breakdown(contributor.id, since=since)
+    ]
+
+    # Review-quality lives per-repo in IndexStore; fan out like /api/stats.
+    q = {"reviews": 0, "blockers": 0, "warnings": 0, "suggestions": 0}
+    accepted = rejected = 0
+    for repo_record in _app_db.list_repos():
+        try:
+            store = IndexStore.open(repo_record.owner, repo_record.repo)
+            try:
+                rq = store.get_review_quality_by_author(contributor.external_login, since=since)
+                fq = store.get_feedback_quality_by_author(contributor.external_login)
+            finally:
+                store.close()
+            for key in q:
+                q[key] += rq[key]
+            accepted += fq["accepted"]
+            rejected += fq["rejected"]
+        except Exception:
+            logger.warning(
+                "Failed to read contributor quality for %s/%s",
+                repo_record.owner,
+                repo_record.repo,
+                exc_info=True,
+            )
+    total_fb = accepted + rejected
+    quality = ReviewQuality(
+        reviews=q["reviews"],
+        blockers=q["blockers"],
+        warnings=q["warnings"],
+        suggestions=q["suggestions"],
+        feedback_accepted=accepted,
+        feedback_rejected=rejected,
+        accept_rate=round(accepted / total_fb, 3) if total_fb else 0.0,
+    )
+
+    return ContributorDetailModel(contributor=item, heatmap=heatmap, repos=repos, quality=quality)
+
+
 @router.get("/api/stats", response_model=OrgStatsModel)
 def get_org_stats(period: str = "") -> OrgStatsModel:
     """Aggregate stats across all repos, optionally filtered by period."""

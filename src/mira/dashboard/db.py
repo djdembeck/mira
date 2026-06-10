@@ -13,6 +13,7 @@ import secrets
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import UTC
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,64 @@ CREATE TABLE IF NOT EXISTS pr_review_progress (
     updated_at REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (owner, repo, pr_number)
 );
+
+-- ── Contributor analytics ──
+-- People who contribute to indexed repos, keyed provider-agnostically so a
+-- future non-GitHub provider slots in without a schema change.
+CREATE TABLE IF NOT EXISTS contributors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL DEFAULT 'github',
+    external_login TEXT NOT NULL,
+    -- Stable numeric id from the provider (GitHub user id). Survives a login
+    -- rename, so a later migration can merge two logins that share an id.
+    external_id INTEGER NOT NULL DEFAULT 0,
+    display_name TEXT NOT NULL DEFAULT '',
+    avatar_url TEXT NOT NULL DEFAULT '',
+    is_bot INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL DEFAULT 0,
+    UNIQUE (provider, external_login)
+);
+
+-- One row per atomic contribution event (PR opened/merged, commit, review).
+-- The UNIQUE key makes both backfill and live webhooks idempotent: a re-run
+-- or an overlapping webhook updates the row instead of double-counting.
+CREATE TABLE IF NOT EXISTS contributions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contributor_id INTEGER NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
+    owner TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    kind TEXT NOT NULL,            -- 'pr_opened' | 'pr_merged' | 'commit' | 'review'
+    external_key TEXT NOT NULL,    -- 'pr:123' | 'prm:123' | 'commit:<sha>' | 'review:<id>'
+    pr_number INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    additions INTEGER NOT NULL DEFAULT 0,
+    deletions INTEGER NOT NULL DEFAULT 0,
+    changed_files INTEGER NOT NULL DEFAULT 0,
+    merged INTEGER NOT NULL DEFAULT 0,
+    -- Epoch of when the event actually happened (authored/merged/committed),
+    -- NOT ingest time — the heatmap buckets on this.
+    event_at REAL NOT NULL DEFAULT 0,
+    event_day TEXT NOT NULL DEFAULT '',  -- 'YYYY-MM-DD' UTC, denormalized from event_at
+    created_at REAL NOT NULL DEFAULT 0,
+    UNIQUE (owner, repo, kind, external_key)
+);
+CREATE INDEX IF NOT EXISTS idx_contrib_contributor ON contributions(contributor_id, event_at);
+CREATE INDEX IF NOT EXISTS idx_contrib_repo ON contributions(owner, repo, event_at);
+
+-- Pre-aggregated per-contributor/day rollup so the 365-day heatmap is one
+-- indexed range scan rather than a GROUP BY over every commit row. Maintained
+-- incrementally — only bumped when a contributions row is genuinely inserted.
+CREATE TABLE IF NOT EXISTS contribution_days (
+    contributor_id INTEGER NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,            -- 'YYYY-MM-DD' UTC
+    commits INTEGER NOT NULL DEFAULT 0,
+    prs_opened INTEGER NOT NULL DEFAULT 0,
+    prs_merged INTEGER NOT NULL DEFAULT 0,
+    reviews INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (contributor_id, day)
+);
 """
 
 _PG_SCHEMA = """
@@ -168,6 +227,52 @@ CREATE TABLE IF NOT EXISTS pr_review_progress (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (owner, repo, pr_number)
 );
+
+-- ── Contributor analytics ── (see SQLite schema above for column rationale)
+CREATE TABLE IF NOT EXISTS contributors (
+    id SERIAL PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'github',
+    external_login TEXT NOT NULL,
+    external_id BIGINT NOT NULL DEFAULT 0,
+    display_name TEXT NOT NULL DEFAULT '',
+    avatar_url TEXT NOT NULL DEFAULT '',
+    is_bot BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at REAL NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL DEFAULT 0,
+    UNIQUE (provider, external_login)
+);
+
+CREATE TABLE IF NOT EXISTS contributions (
+    id SERIAL PRIMARY KEY,
+    contributor_id INTEGER NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
+    owner TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    external_key TEXT NOT NULL,
+    pr_number INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    additions INTEGER NOT NULL DEFAULT 0,
+    deletions INTEGER NOT NULL DEFAULT 0,
+    changed_files INTEGER NOT NULL DEFAULT 0,
+    merged BOOLEAN NOT NULL DEFAULT FALSE,
+    event_at REAL NOT NULL DEFAULT 0,
+    event_day TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL DEFAULT 0,
+    UNIQUE (owner, repo, kind, external_key)
+);
+CREATE INDEX IF NOT EXISTS idx_contrib_contributor ON contributions(contributor_id, event_at);
+CREATE INDEX IF NOT EXISTS idx_contrib_repo ON contributions(owner, repo, event_at);
+
+CREATE TABLE IF NOT EXISTS contribution_days (
+    contributor_id INTEGER NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    commits INTEGER NOT NULL DEFAULT 0,
+    prs_opened INTEGER NOT NULL DEFAULT 0,
+    prs_merged INTEGER NOT NULL DEFAULT 0,
+    reviews INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (contributor_id, day)
+);
 """
 
 SESSION_DURATION = 86400 * 7  # 7 days
@@ -234,6 +339,49 @@ class RepoRecord:
     last_indexed_at: float = 0.0  # 0.0 means never
     conventions: str = ""
     private: bool | None = None  # None = visibility not yet known
+
+
+@dataclass
+class Contributor:
+    """A person who contributes to indexed repos, keyed by (provider, login)."""
+
+    id: int
+    provider: str
+    external_login: str
+    external_id: int = 0
+    display_name: str = ""
+    avatar_url: str = ""
+    is_bot: bool = False
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+
+@dataclass
+class ContributionDay:
+    """One day's contribution counts for a contributor (heatmap cell)."""
+
+    day: str  # 'YYYY-MM-DD' UTC
+    commits: int = 0
+    prs_opened: int = 0
+    prs_merged: int = 0
+    reviews: int = 0
+    total: int = 0
+
+
+# Valid contribution kinds and the contribution_days column each one rolls up.
+_CONTRIB_KIND_COLUMNS = {
+    "commit": "commits",
+    "pr_opened": "prs_opened",
+    "pr_merged": "prs_merged",
+    "review": "reviews",
+}
+
+
+def _epoch_to_day(event_at: float) -> str:
+    """UTC 'YYYY-MM-DD' for an epoch timestamp — the heatmap bucket key."""
+    from datetime import datetime
+
+    return datetime.fromtimestamp(event_at, tz=UTC).strftime("%Y-%m-%d")
 
 
 def _hash_password(password: str) -> str:
@@ -1197,6 +1345,364 @@ class AppDatabase:
                     "DELETE FROM pr_review_progress WHERE owner=%s AND repo=%s AND pr_number=%s",
                     (owner, repo, pr_number),
                 )
+
+    # ── Contributors ──
+
+    @property
+    def _false_sql(self) -> str:
+        """Boolean false literal for the active backend (SQLite stores 0/1)."""
+        return "0" if self._backend == "sqlite" else "FALSE"
+
+    def _rows(self, sql: str, params: tuple = ()) -> list[tuple]:
+        """Run a read-only SELECT written with ``?`` placeholders against
+        either backend (``?`` → ``%s`` for Postgres). Read path only."""
+        if self._backend == "sqlite":
+            assert self._sqlite_conn is not None
+            return self._sqlite_conn.execute(sql, params).fetchall()
+        assert self._pg_conn is not None
+        with self._pg_conn.cursor() as cur:
+            cur.execute(sql.replace("?", "%s"), params)
+            return cur.fetchall()
+
+    def upsert_contributor(
+        self,
+        provider: str,
+        external_login: str,
+        *,
+        external_id: int = 0,
+        display_name: str = "",
+        avatar_url: str = "",
+        is_bot: bool = False,
+    ) -> Contributor:
+        """Insert or update a contributor keyed by (provider, login).
+
+        Non-empty metadata wins on conflict so a sparse webhook update (no
+        avatar/display name) never clobbers a richer backfilled row.
+        """
+        now = time.time()
+        if self._backend == "sqlite":
+            assert self._sqlite_conn is not None
+            self._sqlite_conn.execute(
+                "INSERT INTO contributors "
+                "(provider, external_login, external_id, display_name, avatar_url, is_bot, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(provider, external_login) DO UPDATE SET "
+                "external_id=CASE WHEN excluded.external_id>0 THEN excluded.external_id ELSE contributors.external_id END, "
+                "display_name=CASE WHEN excluded.display_name!='' THEN excluded.display_name ELSE contributors.display_name END, "
+                "avatar_url=CASE WHEN excluded.avatar_url!='' THEN excluded.avatar_url ELSE contributors.avatar_url END, "
+                "is_bot=excluded.is_bot, updated_at=excluded.updated_at",
+                (provider, external_login, external_id, display_name, avatar_url, int(is_bot), now, now),
+            )
+            self._sqlite_conn.commit()
+        else:
+            assert self._pg_conn is not None
+            with self._pg_conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO contributors "
+                    "(provider, external_login, external_id, display_name, avatar_url, is_bot, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT(provider, external_login) DO UPDATE SET "
+                    "external_id=CASE WHEN EXCLUDED.external_id>0 THEN EXCLUDED.external_id ELSE contributors.external_id END, "
+                    "display_name=CASE WHEN EXCLUDED.display_name!='' THEN EXCLUDED.display_name ELSE contributors.display_name END, "
+                    "avatar_url=CASE WHEN EXCLUDED.avatar_url!='' THEN EXCLUDED.avatar_url ELSE contributors.avatar_url END, "
+                    "is_bot=EXCLUDED.is_bot, updated_at=EXCLUDED.updated_at",
+                    (provider, external_login, external_id, display_name, avatar_url, is_bot, now, now),
+                )
+        contributor = self.get_contributor_by_login(provider, external_login)
+        assert contributor is not None  # just upserted
+        return contributor
+
+    def get_contributor_by_login(self, provider: str, external_login: str) -> Contributor | None:
+        rows = self._rows(
+            "SELECT id, provider, external_login, external_id, display_name, avatar_url, "
+            "is_bot, created_at, updated_at FROM contributors WHERE provider=? AND external_login=?",
+            (provider, external_login),
+        )
+        if not rows:
+            return None
+        r = rows[0]
+        return Contributor(
+            id=r[0],
+            provider=r[1],
+            external_login=r[2],
+            external_id=r[3] or 0,
+            display_name=r[4] or "",
+            avatar_url=r[5] or "",
+            is_bot=bool(r[6]),
+            created_at=r[7] or 0.0,
+            updated_at=r[8] or 0.0,
+        )
+
+    def record_contribution(
+        self,
+        contributor_id: int,
+        owner: str,
+        repo: str,
+        kind: str,
+        external_key: str,
+        *,
+        event_at: float,
+        pr_number: int = 0,
+        title: str = "",
+        additions: int = 0,
+        deletions: int = 0,
+        changed_files: int = 0,
+        merged: bool = False,
+    ) -> bool:
+        """Record one contribution event idempotently.
+
+        Returns True only when a new row was inserted (the daily rollup is
+        bumped exactly once per unique event, so backfill re-runs and
+        overlapping webhooks never inflate the heatmap). On a duplicate the
+        mutable metadata (title/additions/...) is refreshed in place — this is
+        how a PR ``synchronize`` that grows the diff updates without
+        double-counting.
+        """
+        if kind not in _CONTRIB_KIND_COLUMNS:
+            raise ValueError(f"unknown contribution kind: {kind!r}")
+        col = _CONTRIB_KIND_COLUMNS[kind]
+        day = _epoch_to_day(event_at)
+        now = time.time()
+        insert_sql = (
+            "INSERT INTO contributions "
+            "(contributor_id, owner, repo, kind, external_key, pr_number, title, "
+            "additions, deletions, changed_files, merged, event_at, event_day, created_at) "
+            "VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}) "
+            "ON CONFLICT(owner, repo, kind, external_key) DO NOTHING"
+        )
+        update_sql = (
+            "UPDATE contributions SET title={p}, additions={p}, deletions={p}, "
+            "changed_files={p}, merged={p} "
+            "WHERE owner={p} AND repo={p} AND kind={p} AND external_key={p}"
+        )
+        rollup_sql = (
+            f"INSERT INTO contribution_days (contributor_id, day, {col}, total) "
+            "VALUES ({p}, {p}, 1, 1) "
+            f"ON CONFLICT(contributor_id, day) DO UPDATE SET {col}=contribution_days.{col}+1, "
+            "total=contribution_days.total+1"
+        )
+        insert_params = (
+            contributor_id, owner, repo, kind, external_key, pr_number, title,
+            additions, deletions, changed_files, merged, event_at, day, now,
+        )
+        update_params = (title, additions, deletions, changed_files, merged, owner, repo, kind, external_key)
+        if self._backend == "sqlite":
+            assert self._sqlite_conn is not None
+            # SQLite stores booleans as 0/1.
+            ins = (*insert_params[:10], int(merged), *insert_params[11:])
+            upd = (title, additions, deletions, changed_files, int(merged), owner, repo, kind, external_key)
+            cur = self._sqlite_conn.execute(insert_sql.format(p="?"), ins)
+            inserted = cur.rowcount == 1
+            if inserted:
+                self._sqlite_conn.execute(rollup_sql.format(p="?"), (contributor_id, day))
+            else:
+                self._sqlite_conn.execute(update_sql.format(p="?"), upd)
+            self._sqlite_conn.commit()
+            return inserted
+        assert self._pg_conn is not None
+        with self._pg_conn.cursor() as cur:
+            cur.execute(insert_sql.format(p="%s"), insert_params)
+            inserted = cur.rowcount == 1
+            if inserted:
+                cur.execute(rollup_sql.format(p="%s"), (contributor_id, day))
+            else:
+                cur.execute(update_sql.format(p="%s"), update_params)
+        return inserted
+
+    def record_contribution_for_login(
+        self,
+        provider: str,
+        login: str,
+        owner: str,
+        repo: str,
+        kind: str,
+        external_key: str,
+        *,
+        event_at: float,
+        external_id: int = 0,
+        display_name: str = "",
+        avatar_url: str = "",
+        is_bot: bool = False,
+        pr_number: int = 0,
+        title: str = "",
+        additions: int = 0,
+        deletions: int = 0,
+        changed_files: int = 0,
+        merged: bool = False,
+    ) -> bool:
+        """Upsert the contributor then record the event. Single call site shared
+        by the webhook handlers and the backfill, which is what keeps the two
+        paths idempotent against each other."""
+        contributor = self.upsert_contributor(
+            provider,
+            login,
+            external_id=external_id,
+            display_name=display_name,
+            avatar_url=avatar_url,
+            is_bot=is_bot,
+        )
+        return self.record_contribution(
+            contributor.id,
+            owner,
+            repo,
+            kind,
+            external_key,
+            event_at=event_at,
+            pr_number=pr_number,
+            title=title,
+            additions=additions,
+            deletions=deletions,
+            changed_files=changed_files,
+            merged=merged,
+        )
+
+    # Whitelisted sort -> aggregate ORDER BY expression. Full expressions
+    # (not output aliases) so it works on both SQLite and Postgres.
+    _CONTRIB_SORTS = {
+        "commits": "SUM(CASE WHEN co.kind='commit' THEN 1 ELSE 0 END) DESC",
+        "prs": "(SUM(CASE WHEN co.kind='pr_opened' THEN 1 ELSE 0 END) "
+        "+ SUM(CASE WHEN co.kind='pr_merged' THEN 1 ELSE 0 END)) DESC",
+        "reviews": "SUM(CASE WHEN co.kind='review' THEN 1 ELSE 0 END) DESC",
+        "recent": "MAX(co.event_at) DESC",
+        "additions": "SUM(co.additions) DESC",
+    }
+
+    def list_contributors(
+        self,
+        sort: str = "commits",
+        since: float | None = None,
+        include_bots: bool = False,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Cross-repo leaderboard: one aggregated row per contributor."""
+        order = self._CONTRIB_SORTS.get(sort, self._CONTRIB_SORTS["commits"])
+        params: list[Any] = []
+        join_cond = "co.contributor_id = c.id"
+        if since is not None:
+            join_cond += " AND co.event_at >= ?"
+            params.append(since)
+        where = "" if include_bots else f"WHERE c.is_bot = {self._false_sql}"
+        having = "HAVING COUNT(co.id) > 0" if since is not None else ""
+        params.append(limit)
+        sql = (
+            "SELECT c.id, c.provider, c.external_login, c.display_name, c.avatar_url, c.is_bot, "
+            "SUM(CASE WHEN co.kind='pr_opened' THEN 1 ELSE 0 END) AS prs_opened, "
+            "SUM(CASE WHEN co.kind='pr_merged' THEN 1 ELSE 0 END) AS prs_merged, "
+            "SUM(CASE WHEN co.kind='commit' THEN 1 ELSE 0 END) AS commits, "
+            "SUM(CASE WHEN co.kind='review' THEN 1 ELSE 0 END) AS reviews, "
+            "COALESCE(SUM(co.additions), 0) AS additions, "
+            "COALESCE(SUM(co.deletions), 0) AS deletions, "
+            "MAX(co.event_at) AS last_active, "
+            "COUNT(DISTINCT co.owner || '/' || co.repo) AS repos_touched "
+            f"FROM contributors c LEFT JOIN contributions co ON {join_cond} "
+            f"{where} "
+            "GROUP BY c.id, c.provider, c.external_login, c.display_name, c.avatar_url, c.is_bot "
+            f"{having} ORDER BY {order} LIMIT ?"
+        )
+        rows = self._rows(sql, tuple(params))
+        return [
+            {
+                "id": r[0],
+                "provider": r[1],
+                "login": r[2],
+                "display_name": r[3] or "",
+                "avatar_url": r[4] or "",
+                "is_bot": bool(r[5]),
+                "prs_opened": int(r[6] or 0),
+                "prs_merged": int(r[7] or 0),
+                "commits": int(r[8] or 0),
+                "reviews": int(r[9] or 0),
+                "additions": int(r[10] or 0),
+                "deletions": int(r[11] or 0),
+                "last_active": (float(r[12]) if r[12] else None),
+                "repos_touched": int(r[13] or 0),
+            }
+            for r in rows
+        ]
+
+    def get_contributor_days(
+        self, contributor_id: int, start_day: str, end_day: str
+    ) -> list[ContributionDay]:
+        """Daily rollup rows in [start_day, end_day] (inclusive) — the heatmap."""
+        rows = self._rows(
+            "SELECT day, commits, prs_opened, prs_merged, reviews, total "
+            "FROM contribution_days WHERE contributor_id=? AND day>=? AND day<=? ORDER BY day",
+            (contributor_id, start_day, end_day),
+        )
+        return [
+            ContributionDay(
+                day=r[0],
+                commits=int(r[1] or 0),
+                prs_opened=int(r[2] or 0),
+                prs_merged=int(r[3] or 0),
+                reviews=int(r[4] or 0),
+                total=int(r[5] or 0),
+            )
+            for r in rows
+        ]
+
+    def get_contributor_repo_breakdown(
+        self, contributor_id: int, since: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Per-repo activity counts for one contributor (where they contribute)."""
+        params: list[Any] = [contributor_id]
+        since_clause = ""
+        if since is not None:
+            since_clause = " AND event_at >= ?"
+            params.append(since)
+        rows = self._rows(
+            "SELECT owner, repo, "
+            "SUM(CASE WHEN kind='commit' THEN 1 ELSE 0 END) AS commits, "
+            "SUM(CASE WHEN kind='pr_opened' THEN 1 ELSE 0 END) AS prs_opened, "
+            "SUM(CASE WHEN kind='pr_merged' THEN 1 ELSE 0 END) AS prs_merged, "
+            "SUM(CASE WHEN kind='review' THEN 1 ELSE 0 END) AS reviews "
+            f"FROM contributions WHERE contributor_id=?{since_clause} "
+            "GROUP BY owner, repo ORDER BY commits DESC, prs_merged DESC",
+            tuple(params),
+        )
+        return [
+            {
+                "owner": r[0],
+                "repo": r[1],
+                "commits": int(r[2] or 0),
+                "prs_opened": int(r[3] or 0),
+                "prs_merged": int(r[4] or 0),
+                "reviews": int(r[5] or 0),
+            }
+            for r in rows
+        ]
+
+    def get_contributor_totals(
+        self, contributor_id: int, since: float | None = None
+    ) -> dict[str, Any]:
+        """Aggregate totals for one contributor across all repos."""
+        params: list[Any] = [contributor_id]
+        since_clause = ""
+        if since is not None:
+            since_clause = " AND event_at >= ?"
+            params.append(since)
+        rows = self._rows(
+            "SELECT "
+            "SUM(CASE WHEN kind='pr_opened' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN kind='pr_merged' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN kind='commit' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN kind='review' THEN 1 ELSE 0 END), "
+            "COALESCE(SUM(additions), 0), COALESCE(SUM(deletions), 0), "
+            "MAX(event_at), COUNT(DISTINCT owner || '/' || repo) "
+            f"FROM contributions WHERE contributor_id=?{since_clause}",
+            tuple(params),
+        )
+        r = rows[0] if rows else (0, 0, 0, 0, 0, 0, None, 0)
+        return {
+            "prs_opened": int(r[0] or 0),
+            "prs_merged": int(r[1] or 0),
+            "commits": int(r[2] or 0),
+            "reviews": int(r[3] or 0),
+            "additions": int(r[4] or 0),
+            "deletions": int(r[5] or 0),
+            "last_active": (float(r[6]) if r[6] else None),
+            "repos_touched": int(r[7] or 0),
+        }
 
     def close(self) -> None:
         if self._sqlite_conn:
