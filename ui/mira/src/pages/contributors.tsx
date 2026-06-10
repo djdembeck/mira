@@ -1,10 +1,15 @@
 import { AlertTriangle, ArrowDown, ArrowUp, ExternalLink, RefreshCw, Search } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useNavigate } from "react-router"
-import { Label, PolarAngleAxis, PolarRadiusAxis, RadialBar, RadialBarChart } from "recharts"
+import { PolarAngleAxis, RadialBar, RadialBarChart } from "recharts"
 
 import { BarGauge } from "@/components/dashboard/bar-gauge"
-import { type ChartConfig, ChartContainer } from "@/components/ui/chart"
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -92,88 +97,60 @@ function StatCard({
   )
 }
 
-function barTone(pct: number): string {
-  if (pct >= 80) return "bg-emerald-500"
-  if (pct >= 60) return "bg-amber-500"
-  return "bg-red-500"
+function scoreText(pct: number): string {
+  if (pct >= 80) return "text-emerald-600 dark:text-emerald-500"
+  if (pct >= 60) return "text-amber-600 dark:text-amber-500"
+  return "text-red-600 dark:text-red-500"
 }
 
-function scoreHex(pct: number): string {
-  if (pct >= 80) return "#10b981" // emerald-500
-  if (pct >= 60) return "#f59e0b" // amber-500
-  return "#ef4444" // red-500
-}
-
-const HEALTH_CHART_CONFIG = { value: { label: "Health" } } satisfies ChartConfig
-
-/** A shadcn-style radial gauge showing the 0–100 score with the number centred. */
-function HealthRadial({ score }: { score: number | null }) {
-  const value = score ?? 0
-  const data = [{ value, fill: score == null ? "var(--muted-foreground)" : scoreHex(value) }]
-  return (
-    <ChartContainer config={HEALTH_CHART_CONFIG} className="mx-auto aspect-square h-[180px] w-[180px]">
-      <RadialBarChart data={data} startAngle={90} endAngle={-270} innerRadius={70} outerRadius={92}>
-        <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
-        <RadialBar dataKey="value" background cornerRadius={10} />
-        <PolarRadiusAxis tick={false} tickLine={false} axisLine={false}>
-          <Label
-            content={({ viewBox }) => {
-              if (viewBox && "cx" in viewBox && "cy" in viewBox) {
-                const cx = viewBox.cx ?? 0
-                const cy = viewBox.cy ?? 0
-                return (
-                  <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
-                    <tspan x={cx} y={cy} className="fill-foreground text-4xl font-bold tabular-nums">
-                      {score ?? "—"}
-                    </tspan>
-                    <tspan x={cx} y={cy + 24} className="fill-muted-foreground text-xs">
-                      / 100
-                    </tspan>
-                  </text>
-                )
-              }
-              return null
-            }}
-          />
-        </PolarRadiusAxis>
-      </RadialBarChart>
-    </ChartContainer>
-  )
-}
+// One concentric ring per health component, each its own colour.
+const HEALTH_CHART_CONFIG = {
+  value: { label: "Score" },
+  approvals: { label: "Approved merges", color: "var(--chart-1)" },
+  responsiveness: { label: "Responsiveness", color: "var(--chart-2)" },
+  backlog: { label: "Backlog health", color: "var(--chart-3)" },
+} satisfies ChartConfig
 
 function HealthCard({ summary, loading }: { summary: ReviewSummary | null; loading: boolean }) {
   const score = summary?.health_score ?? null
+  const data = (summary?.health ?? []).map((c) => ({
+    metric: c.key,
+    value: Math.round(c.score * 100),
+    fill: `var(--color-${c.key})`,
+  }))
+
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle>Review health score</CardTitle>
-        <CardDescription>Are humans still reviewing, approving, and merging?</CardDescription>
+    <Card className="flex flex-col">
+      <CardHeader className="items-center pb-0">
+        <CardTitle>Review health</CardTitle>
+        <CardDescription>Reviewing · approving · merging</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex-1 pb-0">
         {loading ? (
-          <Skeleton className="h-20 w-full" />
+          <Skeleton className="mx-auto aspect-square max-h-[220px] w-full rounded-full" />
         ) : (
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-            <HealthRadial score={score} />
-            <div className="flex-1 space-y-2.5">
-              {(summary?.health ?? []).map((c) => {
-                const pct = Math.round(c.score * 100)
-                return (
-                  <div key={c.key}>
-                    <div className="flex items-baseline justify-between gap-2 text-xs">
-                      <span className="font-medium">{c.label}</span>
-                      <span className="text-muted-foreground">{c.detail}</span>
-                    </div>
-                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div className={`h-full rounded-full ${barTone(pct)}`} style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <ChartContainer config={HEALTH_CHART_CONFIG} className="mx-auto aspect-square max-h-[220px]">
+            <RadialBarChart data={data} innerRadius={30} outerRadius={110}>
+              <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
+              <ChartTooltip
+                cursor={false}
+                content={<ChartTooltipContent hideLabel nameKey="metric" />}
+              />
+              <RadialBar dataKey="value" background cornerRadius={4} />
+            </RadialBarChart>
+          </ChartContainer>
         )}
       </CardContent>
+      <CardFooter className="flex-col gap-1 pt-3 text-sm">
+        <div className="font-medium">
+          Health score{" "}
+          <span className={score != null ? scoreText(score) : "text-muted-foreground"}>
+            {score ?? "—"}
+          </span>{" "}
+          / 100
+        </div>
+        <div className="text-muted-foreground">Are humans still reviewing and merging?</div>
+      </CardFooter>
     </Card>
   )
 }
@@ -484,9 +461,10 @@ export function ContributorsPage() {
 
       {refreshError && <p className="text-sm text-destructive">{refreshError}</p>}
 
-      <HealthCard summary={summary ?? null} loading={summaryLoading} />
+      <div className="grid gap-4 lg:grid-cols-3">
+        <HealthCard summary={summary ?? null} loading={summaryLoading} />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:col-span-2">
         <StatCard
           label="Open PRs"
           value={summary?.open_prs ?? 0}
@@ -527,6 +505,7 @@ export function ContributorsPage() {
           }
           loading={summaryLoading}
         />
+        </div>
       </div>
 
       <ReviewersCard />
