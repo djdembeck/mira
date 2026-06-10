@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { type Column, useDataTable } from "@/components/ui/use-data-table"
 import { useAuth } from "@/lib/auth"
-import { api, type OpenPr, type ReviewerStat } from "@/lib/api"
+import { api, type OpenPr, type ReviewerStat, type ReviewSummary } from "@/lib/api"
 import { useAsync } from "@/lib/hooks"
 
 // ── formatting helpers ──
@@ -86,6 +86,64 @@ function StatCard({
       <CardFooter className="text-sm text-muted-foreground">
         {loading ? <Skeleton className="h-4 w-32" /> : footer}
       </CardFooter>
+    </Card>
+  )
+}
+
+function scoreTone(pct: number): string {
+  if (pct >= 80) return "text-emerald-600 dark:text-emerald-500"
+  if (pct >= 60) return "text-amber-600 dark:text-amber-500"
+  return "text-red-600 dark:text-red-500"
+}
+
+function barTone(pct: number): string {
+  if (pct >= 80) return "bg-emerald-500"
+  if (pct >= 60) return "bg-amber-500"
+  return "bg-red-500"
+}
+
+function HealthCard({ summary, loading }: { summary: ReviewSummary | null; loading: boolean }) {
+  const score = summary?.health_score ?? null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle>Review health score</CardTitle>
+        <CardDescription>Are humans still reviewing, approving, and merging?</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : (
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+            <div className="flex items-baseline gap-1">
+              <span
+                className={`text-5xl font-semibold tabular-nums ${
+                  score != null ? scoreTone(score) : "text-muted-foreground"
+                }`}
+              >
+                {score ?? "—"}
+              </span>
+              <span className="text-lg text-muted-foreground">/ 100</span>
+            </div>
+            <div className="flex-1 space-y-2.5">
+              {(summary?.health ?? []).map((c) => {
+                const pct = Math.round(c.score * 100)
+                return (
+                  <div key={c.key}>
+                    <div className="flex items-baseline justify-between gap-2 text-xs">
+                      <span className="font-medium">{c.label}</span>
+                      <span className="text-muted-foreground">{c.detail}</span>
+                    </div>
+                    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div className={`h-full rounded-full ${barTone(pct)}`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
     </Card>
   )
 }
@@ -396,7 +454,9 @@ export function ContributorsPage() {
 
       {refreshError && <p className="text-sm text-destructive">{refreshError}</p>}
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <HealthCard summary={summary ?? null} loading={summaryLoading} />
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           label="Open PRs"
           value={summary?.open_prs ?? 0}
@@ -407,6 +467,12 @@ export function ContributorsPage() {
           label="Stale PRs"
           value={summary?.stale_prs ?? 0}
           footer="idle more than 3 days"
+          loading={summaryLoading}
+        />
+        <StatCard
+          label="Approved & merged"
+          value={summary?.approved_merged ?? 0}
+          footer={`of ${summary?.merged ?? 0} merged this week`}
           loading={summaryLoading}
         />
         <StatCard

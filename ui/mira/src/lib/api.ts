@@ -342,11 +342,22 @@ export interface ThroughputWindow {
   time_to_merge_count: number
 }
 
+export interface HealthComponent {
+  key: string
+  label: string
+  score: number // 0–1
+  detail: string
+}
+
 export interface ReviewSummary {
   days: number
   open_prs: number
   stale_prs: number
   awaiting_review: number
+  merged: number
+  approved_merged: number
+  health_score: number | null
+  health: HealthComponent[]
   current: ThroughputWindow
   previous: ThroughputWindow
 }

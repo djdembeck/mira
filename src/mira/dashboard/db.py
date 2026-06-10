@@ -1949,6 +1949,27 @@ class AppDatabase:
             for r in rows
         ]
 
+    def get_merged_pr_quality(self, start: float, end: float) -> list[dict[str, Any]]:
+        """For PRs merged in [start, end): whether they were reviewed and whether
+        a human approved — for the 'humans approve + merge' health signal."""
+        rows = self._rows(
+            "SELECT p.created_at, p.merged_at, p.first_review_at, "
+            "CASE WHEN EXISTS (SELECT 1 FROM pr_reviewers r "
+            "  WHERE r.owner=p.owner AND r.repo=p.repo AND r.pr_number=p.number "
+            "  AND r.state='approved') THEN 1 ELSE 0 END "
+            "FROM pull_requests p WHERE p.merged_at >= ? AND p.merged_at < ?",
+            (start, end),
+        )
+        return [
+            {
+                "created_at": r[0] or 0.0,
+                "merged_at": r[1] or 0.0,
+                "first_review_at": r[2] or 0.0,
+                "approved": bool(r[3]),
+            }
+            for r in rows
+        ]
+
     def close(self) -> None:
         if self._sqlite_conn:
             self._sqlite_conn.close()

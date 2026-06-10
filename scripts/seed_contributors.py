@@ -171,6 +171,11 @@ def seed_review_insights(db) -> dict:  # type: ignore[no-untyped-def]
     PRs with pending + answered reviewers, and recent merged PRs for throughput."""
     import time
 
+    # Clear any previously-seeded PRs so re-runs stay clean (pr_no drifts when
+    # this script changes, which would otherwise leave stale rows behind).
+    db._exec("DELETE FROM pull_requests WHERE owner=?", (OWNER,))
+    db._exec("DELETE FROM pr_reviewers WHERE owner=?", (OWNER,))
+
     now = time.time()
     DAY = 86400
     HOUR = 3600
@@ -250,7 +255,15 @@ def seed_review_insights(db) -> dict:  # type: ignore[no-untyped-def]
                 url=f"https://github.com/{OWNER}/{repo}/pull/{pr_no}", state="merged",
                 created_at=created, updated_at=merged, merged_at=merged,
             )
-            db.set_pr_first_review(OWNER, repo, pr_no, created + ttfr)
+            first_review = created + ttfr
+            db.set_pr_first_review(OWNER, repo, pr_no, first_review)
+            # Most merges got a human approval; a few slipped in without one.
+            reviewer = random.choice([r for r in logins if r != author])
+            state = "approved" if random.random() < 0.85 else "commented"
+            db.upsert_pr_reviewer(
+                OWNER, repo, pr_no, reviewer,
+                requested_at=created, responded_at=first_review, state=state,
+            )
             counts["merged"] += 1
     return counts
 

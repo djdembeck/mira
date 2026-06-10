@@ -1949,11 +1949,22 @@ class ThroughputWindow(BaseModel):
     time_to_merge_count: int = 0
 
 
+class HealthComponent(BaseModel):
+    key: str
+    label: str
+    score: float  # 0–1
+    detail: str
+
+
 class ReviewSummary(BaseModel):
     days: int
     open_prs: int
     stale_prs: int
     awaiting_review: int
+    merged: int = 0
+    approved_merged: int = 0
+    health_score: int | None = None  # 0–100
+    health: list[HealthComponent] = []
     current: ThroughputWindow
     previous: ThroughputWindow
 
@@ -2005,6 +2016,15 @@ def _now() -> float:
     return datetime.now(tz=UTC).timestamp()
 
 
+def _fmt_secs(secs: float) -> str:
+    """Compact human duration for health-component detail text."""
+    if secs < 3600:
+        return f"{int(secs // 60)}m"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h"
+    return f"{int(secs // 86400)}d"
+
+
 @router.get("/api/review-insights/summary", response_model=ReviewSummary)
 def review_summary(request: Request, days: int = 7, stale_days: int = 3) -> ReviewSummary:
     """Throughput medians (this window vs previous) + open/stale/awaiting counts. Admin."""
@@ -2045,13 +2065,71 @@ def review_summary(request: Request, days: int = 7, stale_days: int = 3) -> Revi
     stale = sum(1 for p in active if now - p["updated_at"] > stale_cutoff)
     awaiting = sum(1 for p in active if p["first_review_at"] == 0)
 
+    current = window_throughput(now - window, now)
+    previous = window_throughput(now - 2 * window, now - window)
+
+    # ── Health score ── proof that humans review, approve, and merge.
+    merged_rows = _app_db.get_merged_pr_quality(now - window, now)
+    merged_n = len(merged_rows)
+    approved_n = sum(1 for m in merged_rows if m["approved"])
+
+    components: list[HealthComponent] = []
+    weights: list[float] = []
+    # 40% — share of merges that a human approved.
+    if merged_n:
+        rate = approved_n / merged_n
+        components.append(
+            HealthComponent(
+                key="approvals",
+                label="Merges approved by a human",
+                score=rate,
+                detail=f"{approved_n} of {merged_n} merged PRs had an approval",
+            )
+        )
+        weights.append(0.4)
+    # 30% — reviews start promptly (24h target).
+    ttfr = current.time_to_first_review_secs
+    if ttfr:
+        resp = max(0.0, min(1.0, 86400 / ttfr))
+        components.append(
+            HealthComponent(
+                key="responsiveness",
+                label="Reviews start promptly",
+                score=resp,
+                detail=f"median first review in {_fmt_secs(ttfr)} (target 24h)",
+            )
+        )
+        weights.append(0.3)
+    # 30% — open PRs aren't going stale.
+    backlog = 1.0 - (stale / len(active)) if active else 1.0
+    components.append(
+        HealthComponent(
+            key="backlog",
+            label="Open PRs aren't going stale",
+            score=backlog,
+            detail=(f"{stale} of {len(active)} open PRs are stale" if active else "no open PRs"),
+        )
+    )
+    weights.append(0.3)
+
+    total_w = sum(weights)
+    health_score = (
+        round(100 * sum(c.score * w for c, w in zip(components, weights, strict=True)) / total_w)
+        if total_w
+        else None
+    )
+
     return ReviewSummary(
         days=days,
         open_prs=len(active),
         stale_prs=stale,
         awaiting_review=awaiting,
-        current=window_throughput(now - window, now),
-        previous=window_throughput(now - 2 * window, now - window),
+        merged=merged_n,
+        approved_merged=approved_n,
+        health_score=health_score,
+        health=components,
+        current=current,
+        previous=previous,
     )
 
 

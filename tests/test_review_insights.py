@@ -93,6 +93,29 @@ def test_review_summary(patched_api: AppDatabase) -> None:
     assert s.current.time_to_first_review_secs == HOUR
 
 
+def test_review_health_score(patched_api: AppDatabase) -> None:
+    now = time.time()
+    # Two PRs merged this week — one approved by a human, one not.
+    for n, approved in ((10, True), (11, False)):
+        patched_api.upsert_pull_request(
+            "o", "r", n, state="merged",
+            created_at=now - 2 * DAY, updated_at=now - DAY, merged_at=now - DAY,
+        )
+        patched_api.set_pr_first_review("o", "r", n, now - 2 * DAY + HOUR)
+        if approved:
+            patched_api.upsert_pr_reviewer(
+                "o", "r", n, "alice", responded_at=now - 2 * DAY + HOUR, state="approved"
+            )
+    s = api.review_summary(_admin(), days=7, stale_days=3)
+    assert s.merged == 2
+    assert s.approved_merged == 1
+    assert s.health_score is not None
+    keys = {c.key for c in s.health}
+    assert keys == {"approvals", "responsiveness", "backlog"}
+    approvals = next(c for c in s.health if c.key == "approvals")
+    assert approvals.score == 0.5  # 1 of 2 merges approved
+
+
 def test_open_prs_board(patched_api: AppDatabase) -> None:
     now = time.time()
     patched_api.upsert_pull_request(
