@@ -24,14 +24,15 @@ export const CONTRIB_GAUGE_LEVELS = [
   "bg-[#216e3a] dark:bg-[#39d353]",
 ]
 
-// Heat ramp (yellow → red) for gauges where "more is worse" — e.g. a reviewer's
-// pending backlog. Same shape + theme-awareness as the green ramp.
+// Heat ramp for gauges where "more is worse" — e.g. a reviewer's pending
+// backlog. A proper severity scale: green (fine) → yellow → orange → red (bad).
+// These hues read on both themes, so only the empty shade needs a dark variant.
 export const CONTRIB_GAUGE_HEAT = [
   "bg-[#ebedf0] dark:bg-[#2d333b]",
-  "bg-[#fde68a] dark:bg-[#854d0e]",
-  "bg-[#fdba74] dark:bg-[#b45309]",
-  "bg-[#fb923c] dark:bg-[#ea580c]",
-  "bg-[#ef4444] dark:bg-[#f87171]",
+  "bg-[#22c55e]",
+  "bg-[#eab308]",
+  "bg-[#f97316]",
+  "bg-[#ef4444]",
 ]
 
 // A faint inset ring gives every square/bar a crisp edge against either
