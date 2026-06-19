@@ -1,25 +1,25 @@
-"""Tests for the provider-profile registry (mira.llm.providers)."""
+"""Tests for the provider-profile registry (mira.llm.provider_profiles)."""
 
 from __future__ import annotations
 
 import json
 
-from mira.llm import providers
+from mira.llm import provider_profiles as profiles
 
 
 class TestResolve:
     def test_matches_openrouter_by_base_url(self):
-        p = providers.resolve("https://openrouter.ai/api/v1")
+        p = profiles.resolve("https://openrouter.ai/api/v1")
         assert p["name"] == "openrouter"
         assert p["model_prefix"] == "keep"
         assert p["extra_headers"]["X-Title"] == "Mira Code Reviewer"
         assert p["reasoning_effort_map"] == {"max": "xhigh"}
 
     def test_trailing_slash_insensitive(self):
-        assert providers.resolve("https://openrouter.ai/api/v1/")["name"] == "openrouter"
+        assert profiles.resolve("https://openrouter.ai/api/v1/")["name"] == "openrouter"
 
     def test_unknown_url_returns_portable_default(self):
-        p = providers.resolve("https://some-new-llm.example/v1")
+        p = profiles.resolve("https://some-new-llm.example/v1")
         assert p["name"] == ""
         assert p["model_prefix"] == "strip"
         assert p["extra_headers"] == {}
@@ -33,23 +33,23 @@ class TestResolve:
             json.dumps({"sparse": {"base_url": "https://sparse.test/v1", "api_key_env": "K"}})
         )
         monkeypatch.setenv("MIRA_PROVIDERS_JSON_PATH", str(custom))
-        providers._load.cache_clear()
+        profiles._load.cache_clear()
         try:
-            p = providers.resolve("https://sparse.test/v1")
+            p = profiles.resolve("https://sparse.test/v1")
             assert p["name"] == "sparse"
             assert p["model_prefix"] == "strip"
             assert p["extra_headers"] == {}
             assert p["reasoning_effort_map"] == {}
         finally:
-            providers._load.cache_clear()
+            profiles._load.cache_clear()
 
 
 class TestGet:
     def test_injects_name(self):
-        assert providers.get("openrouter")["name"] == "openrouter"
+        assert profiles.get("openrouter")["name"] == "openrouter"
 
     def test_missing_returns_none(self):
-        assert providers.get("not-a-provider") is None
+        assert profiles.get("not-a-provider") is None
 
 
 class TestRuntimeOverride:
@@ -70,21 +70,21 @@ class TestRuntimeOverride:
             )
         )
         monkeypatch.setenv("MIRA_PROVIDERS_JSON_PATH", str(custom))
-        providers._load.cache_clear()
+        profiles._load.cache_clear()
         try:
-            p = providers.resolve("https://llm.acme.test/v1")
+            p = profiles.resolve("https://llm.acme.test/v1")
             assert p["name"] == "acme"
             assert p["model_prefix"] == "keep"
             assert p["extra_headers"] == {"X-Acme": "1"}
             # Bundled profiles still resolve alongside the override.
-            assert providers.resolve("https://openrouter.ai/api/v1")["name"] == "openrouter"
+            assert profiles.resolve("https://openrouter.ai/api/v1")["name"] == "openrouter"
         finally:
-            providers._load.cache_clear()
+            profiles._load.cache_clear()
 
     def test_missing_override_file_falls_back(self, monkeypatch):
         monkeypatch.setenv("MIRA_PROVIDERS_JSON_PATH", "/no/such/providers.json")
-        providers._load.cache_clear()
+        profiles._load.cache_clear()
         try:
-            assert providers.resolve("https://openrouter.ai/api/v1")["name"] == "openrouter"
+            assert profiles.resolve("https://openrouter.ai/api/v1")["name"] == "openrouter"
         finally:
-            providers._load.cache_clear()
+            profiles._load.cache_clear()

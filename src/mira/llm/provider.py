@@ -1,7 +1,7 @@
 """OpenAI-compatible API provider with retry/fallback and tool calling support.
 
 Per-provider quirks (attribution headers, model-prefix policy, reasoning
-remapping) come from the profile registry in ``mira.llm.providers``, matched
+remapping) come from the profile registry in ``mira.llm.provider_profiles``, matched
 to the configured ``base_url``. OpenRouter is the one profile with quirks; any
 other OpenAI-compatible endpoint works off the portable default, no entry needed.
 """
@@ -17,7 +17,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from mira.config import LLMConfig
 from mira.exceptions import LLMError
-from mira.llm import providers
+from mira.llm import provider_profiles as profiles
 from mira.llm.tool_schemas import SUBMIT_REVIEW_TOOL, SUBMIT_WALKTHROUGH_TOOL
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def _strip_model_prefix(model: str, base_url: str) -> str:
     endpoints) sends the bare model name (e.g. 'minimax/MiniMax-M2.7' →
     'MiniMax-M2.7').
     """
-    profile = providers.resolve(base_url)
+    profile = profiles.resolve(base_url)
     if profile.get("model_prefix") == "keep":
         self_prefix = f"{profile['name']}/"
         return model[len(self_prefix) :] if model.startswith(self_prefix) else model
@@ -74,7 +74,7 @@ class LLMProvider:
         self.config = config
         # Per-provider quirks (headers, model-prefix, reasoning remap), matched
         # to the endpoint by base_url. Unknown endpoints get the portable default.
-        self.profile = providers.resolve(config.base_url)
+        self.profile = profiles.resolve(config.base_url)
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
         # Models that 400 on a forced tool_choice (deepseek thinking mode);

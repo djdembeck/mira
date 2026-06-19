@@ -394,8 +394,11 @@ class ReviewEngine:
                 logger.warning("Failed to post in-progress walkthrough: %s", exc)
 
         # Round 2+ raises the comment threshold so we converge instead of
-        # dripping new findings on every push.
+        # dripping new findings on every push. review-rest is a continuation of
+        # round 1 onto never-reviewed files, so it stays round 1 (full
+        # thresholds, full diff) even though the first pass left threads behind.
         review_round = 1
+        is_review_rest = getattr(self, "_review_only_paths", None) is not None
         resolved_thread_dicts: list[dict] = []
         try:
             if self.bot_name and self.provider is not None:
@@ -403,7 +406,7 @@ class ReviewEngine:
                     pr_info,
                     self.bot_name,
                 )
-                if all_bot_threads:
+                if all_bot_threads and not is_review_rest:
                     review_round = 2
                 resolved_thread_dicts = [
                     {
