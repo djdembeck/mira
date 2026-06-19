@@ -68,12 +68,12 @@ async def register_gitlab_repo(body: GitLabRepoRegister) -> dict:
         from mira.index.indexer import index_repo
         from mira.platforms.fetch import EmptyRepoError, make_fetcher
 
+        store = None
         try:
             store = IndexStore.open(owner, repo, platform="gitlab")
             count = await index_repo(
                 owner=owner, repo=repo, store=store, fetcher=make_fetcher("gitlab", token)
             )
-            store.close()
             _api._app_db.set_repo_status(
                 owner, repo, "ready", files_indexed=count, bump_last_indexed=True, platform="gitlab"
             )
@@ -82,6 +82,9 @@ async def register_gitlab_repo(body: GitLabRepoRegister) -> dict:
         except Exception as exc:
             logger.exception("GitLab indexing failed for %s/%s", owner, repo)
             _api._app_db.set_repo_status(owner, repo, "failed", error=str(exc), platform="gitlab")
+        finally:
+            if store is not None:
+                store.close()
 
     asyncio.create_task(_index())
     return {"status": "indexing", "owner": owner, "repo": repo, "platform": "gitlab"}
