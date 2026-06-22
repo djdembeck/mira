@@ -180,7 +180,8 @@ def test_record_pr_contribution_no_double_count_on_synchronize(
     payload = {
         "repository": {"owner": {"login": "o"}, "name": "r"},
         "pull_request": {
-            "number": 7, "title": "x",
+            "number": 7,
+            "title": "x",
             "user": {"login": "alice", "id": 3},
             "created_at": "2024-05-01T00:00:00Z",
             "additions": 5,

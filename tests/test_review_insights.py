@@ -81,8 +81,14 @@ def test_review_summary(patched_api: AppDatabase) -> None:
     )
     # merged this week: ttfr 1h, ttm 2d
     patched_api.upsert_pull_request(
-        "o", "r", 2, author="bob", state="merged",
-        created_at=now - 3 * DAY, updated_at=now - 1 * DAY, merged_at=now - 1 * DAY,
+        "o",
+        "r",
+        2,
+        author="bob",
+        state="merged",
+        created_at=now - 3 * DAY,
+        updated_at=now - 1 * DAY,
+        merged_at=now - 1 * DAY,
     )
     patched_api.set_pr_first_review("o", "r", 2, now - 3 * DAY + HOUR)
     s = api.review_summary(_admin(), days=7, stale_days=3)
@@ -99,8 +105,14 @@ def test_is_bare_approval() -> None:
     assert is_bare_approval("approved", "", []) is True
     assert is_bare_approval("approved", "LGTM!", []) is True
     assert is_bare_approval("approved", "LGTM", ["nice"]) is True  # trivial comment doesn't save it
-    assert is_bare_approval("approved", "Please add a null check before the deref on line 40", []) is False
-    assert is_bare_approval("approved", "LGTM", ["This will crash on an empty list — guard it"]) is False
+    assert (
+        is_bare_approval("approved", "Please add a null check before the deref on line 40", [])
+        is False
+    )
+    assert (
+        is_bare_approval("approved", "LGTM", ["This will crash on an empty list — guard it"])
+        is False
+    )
     assert is_bare_approval("changes_requested", "", []) is False  # only approvals can be bare
 
 
@@ -117,10 +129,10 @@ def test_bare_approval_persists_and_is_guarded(db: AppDatabase) -> None:
 def test_reviewer_rubber_stamp_rate(patched_api: AppDatabase) -> None:
     now = time.time()
     # diego: 2 approvals, both bare → 100%. eve: 2 approvals, 1 bare → 50%.
-    for n, (who, bare) in enumerate(
-        [("diego", 1), ("diego", 1), ("eve", 1), ("eve", 0)], start=1
-    ):
-        patched_api.upsert_pull_request("o", "r", n, state="open", created_at=now - DAY, updated_at=now - DAY)
+    for n, (who, bare) in enumerate([("diego", 1), ("diego", 1), ("eve", 1), ("eve", 0)], start=1):
+        patched_api.upsert_pull_request(
+            "o", "r", n, state="open", created_at=now - DAY, updated_at=now - DAY
+        )
         patched_api.upsert_pr_reviewer(
             "o", "r", n, who, responded_at=now - HOUR, state="approved", bare_approval=bare
         )
@@ -137,8 +149,13 @@ def test_review_health_score(patched_api: AppDatabase) -> None:
     # Two PRs merged this week — one approved by a human, one not.
     for n, approved in ((10, True), (11, False)):
         patched_api.upsert_pull_request(
-            "o", "r", n, state="merged",
-            created_at=now - 2 * DAY, updated_at=now - DAY, merged_at=now - DAY,
+            "o",
+            "r",
+            n,
+            state="merged",
+            created_at=now - 2 * DAY,
+            updated_at=now - DAY,
+            merged_at=now - DAY,
         )
         patched_api.set_pr_first_review("o", "r", n, now - 2 * DAY + HOUR)
         if approved:
@@ -158,8 +175,15 @@ def test_review_health_score(patched_api: AppDatabase) -> None:
 def test_open_prs_board(patched_api: AppDatabase) -> None:
     now = time.time()
     patched_api.upsert_pull_request(
-        "o", "r", 1, author="bob", title="Stuck", url="u1", state="open",
-        created_at=now - 6 * DAY, updated_at=now - 5 * DAY,
+        "o",
+        "r",
+        1,
+        author="bob",
+        title="Stuck",
+        url="u1",
+        state="open",
+        created_at=now - 6 * DAY,
+        updated_at=now - 5 * DAY,
     )
     patched_api.upsert_pr_reviewer("o", "r", 1, "alice", requested_at=now - 5 * DAY)
     board = api.review_open_prs(_admin(), stale_days=3)
@@ -183,7 +207,13 @@ def test_reviewers_bottleneck_ordering(patched_api: AppDatabase) -> None:
         "o", "r", 3, state="open", created_at=now - DAY, updated_at=now - DAY
     )
     patched_api.upsert_pr_reviewer(
-        "o", "r", 3, "alice", requested_at=now - DAY, responded_at=now - DAY + HOUR, state="approved"
+        "o",
+        "r",
+        3,
+        "alice",
+        requested_at=now - DAY,
+        responded_at=now - DAY + HOUR,
+        state="approved",
     )
     stats = api.review_reviewers(_admin(), days=30)
     assert stats[0].reviewer == "jonas"  # biggest pending queue first
@@ -226,9 +256,14 @@ async def test_handle_review_request_and_submit(
 
     # 1) review requested → alice pending
     await handlers.handle_pr_review_meta(
-        {"action": "review_requested", "repository": repo, "pull_request": base_pr,
-         "requested_reviewer": {"login": "alice"}},
-        auth, "mira",
+        {
+            "action": "review_requested",
+            "repository": repo,
+            "pull_request": base_pr,
+            "requested_reviewer": {"login": "alice"},
+        },
+        auth,
+        "mira",
     )
     assert patched_api.get_open_pull_requests()[0]["number"] == 1
     [rv] = patched_api.get_open_pr_reviewers()
@@ -236,10 +271,19 @@ async def test_handle_review_request_and_submit(
 
     # 2) alice submits an approval → responded + first_review + review contribution
     await handlers.handle_pull_request_review(
-        {"action": "submitted", "repository": repo, "pull_request": base_pr,
-         "review": {"id": 99, "user": {"login": "alice", "id": 3, "type": "User"},
-                    "state": "APPROVED", "submitted_at": "2024-01-03T00:00:00Z"}},
-        auth, "mira",
+        {
+            "action": "submitted",
+            "repository": repo,
+            "pull_request": base_pr,
+            "review": {
+                "id": 99,
+                "user": {"login": "alice", "id": 3, "type": "User"},
+                "state": "APPROVED",
+                "submitted_at": "2024-01-03T00:00:00Z",
+            },
+        },
+        auth,
+        "mira",
     )
     [rv2] = patched_api.get_open_pr_reviewers()
     assert rv2["responded_at"] > 0
@@ -254,13 +298,24 @@ async def test_self_review_ignored(
 ) -> None:
     auth = MagicMock()
     await handlers.handle_pull_request_review(
-        {"action": "submitted",
-         "repository": {"owner": {"login": "o"}, "name": "r"},
-         "pull_request": {"number": 1, "user": {"login": "bob"},
-                          "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"},
-         "review": {"id": 1, "user": {"login": "bob", "type": "User"},
-                    "state": "APPROVED", "submitted_at": "2024-01-02T00:00:00Z"}},
-        auth, "mira",
+        {
+            "action": "submitted",
+            "repository": {"owner": {"login": "o"}, "name": "r"},
+            "pull_request": {
+                "number": 1,
+                "user": {"login": "bob"},
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+            },
+            "review": {
+                "id": 1,
+                "user": {"login": "bob", "type": "User"},
+                "state": "APPROVED",
+                "submitted_at": "2024-01-02T00:00:00Z",
+            },
+        },
+        auth,
+        "mira",
     )
     # bob reviewing his own PR is not a review of someone else's work
     assert patched_api.get_open_pr_reviewers() == []

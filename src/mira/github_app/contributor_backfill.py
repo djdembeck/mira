@@ -123,14 +123,27 @@ def _record_pr(db: Any, owner: str, repo: str, pr: Any, counts: dict[str, int]) 
         "changed_files": pr.changed_files or 0,
     }
     db.record_contribution_for_login(
-        "github", login, owner, repo, "pr_opened", f"pr:{pr.number}",
-        event_at=_dt_to_epoch(pr.created_at), **common,
+        "github",
+        login,
+        owner,
+        repo,
+        "pr_opened",
+        f"pr:{pr.number}",
+        event_at=_dt_to_epoch(pr.created_at),
+        **common,
     )
     counts["prs"] += 1
     if pr.merged_at:
         db.record_contribution_for_login(
-            "github", login, owner, repo, "pr_merged", f"prm:{pr.number}",
-            event_at=_dt_to_epoch(pr.merged_at), merged=True, **common,
+            "github",
+            login,
+            owner,
+            repo,
+            "pr_merged",
+            f"prm:{pr.number}",
+            event_at=_dt_to_epoch(pr.merged_at),
+            merged=True,
+            **common,
         )
         counts["merges"] += 1
 
@@ -200,7 +213,12 @@ def _record_reviews(db: Any, owner: str, repo: str, pr: Any, counts: dict[str, i
         submitted = _dt_to_epoch(review.submitted_at)
         state = (review.state or "").lower()
         db.record_contribution_for_login(
-            "github", r_login, owner, repo, "review", f"review:{review.id}",
+            "github",
+            r_login,
+            owner,
+            repo,
+            "review",
+            f"review:{review.id}",
             event_at=submitted,
             external_id=(r_user.id or 0),
             avatar_url=(r_user.avatar_url or ""),
@@ -212,7 +230,10 @@ def _record_reviews(db: Any, owner: str, repo: str, pr: Any, counts: dict[str, i
         # Review-insights: responsiveness, first-review timing, rubber-stamp flag.
         bare = is_bare_approval(state, review.body or "", comments_by_review.get(review.id, []))
         db.upsert_pr_reviewer(
-            owner, repo, pr.number, r_login,
+            owner,
+            repo,
+            pr.number,
+            r_login,
             responded_at=submitted,
             state=state,
             bare_approval=int(bare),
@@ -251,7 +272,12 @@ def _backfill_commits(
         event_at = _dt_to_epoch(inner.author.date if inner and inner.author else None)
         title = (inner.message.split("\n", 1)[0][:200]) if inner and inner.message else ""
         db.record_contribution_for_login(
-            "github", login, owner, repo, "commit", f"commit:{commit.sha}",
+            "github",
+            login,
+            owner,
+            repo,
+            "commit",
+            f"commit:{commit.sha}",
             event_at=event_at,
             external_id=(author.id or 0),
             avatar_url=(author.avatar_url or ""),

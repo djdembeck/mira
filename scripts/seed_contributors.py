@@ -68,8 +68,9 @@ def seed() -> None:
     # Register repos so they appear in the list + power the review-quality fan-out.
     for repo in REPOS:
         db.register_repo(OWNER, repo, installation_id=1)
-        db.set_repo_status(OWNER, repo, "ready", files_indexed=random.randint(80, 400),
-                           bump_last_indexed=True)
+        db.set_repo_status(
+            OWNER, repo, "ready", files_indexed=random.randint(80, 400), bump_last_indexed=True
+        )
 
     stores = {repo: IndexStore.open(OWNER, repo) for repo in REPOS}
     totals = {"commits": 0, "prs": 0, "merges": 0, "reviews": 0}
@@ -85,9 +86,17 @@ def seed() -> None:
         for i in range(n_commits):
             repo = random.choice(REPOS)
             db.record_contribution_for_login(
-                "github", login, OWNER, repo, "commit", f"commit:{login}-{i}",
-                event_at=_day_epoch(), is_bot=is_bot, avatar_url=avatar,
-                display_name=display, title="chore: update",
+                "github",
+                login,
+                OWNER,
+                repo,
+                "commit",
+                f"commit:{login}-{i}",
+                event_at=_day_epoch(),
+                is_bot=is_bot,
+                avatar_url=avatar,
+                display_name=display,
+                title="chore: update",
             )
             totals["commits"] += 1
 
@@ -98,19 +107,40 @@ def seed() -> None:
             adds = random.randint(5, 600)
             dels = random.randint(0, 300)
             db.record_contribution_for_login(
-                "github", login, OWNER, repo, "pr_opened", f"pr:{login}-{i}",
-                event_at=opened_at, is_bot=is_bot, avatar_url=avatar,
-                display_name=display, pr_number=i, title="feat: a change",
-                additions=adds, deletions=dels, changed_files=random.randint(1, 25),
+                "github",
+                login,
+                OWNER,
+                repo,
+                "pr_opened",
+                f"pr:{login}-{i}",
+                event_at=opened_at,
+                is_bot=is_bot,
+                avatar_url=avatar,
+                display_name=display,
+                pr_number=i,
+                title="feat: a change",
+                additions=adds,
+                deletions=dels,
+                changed_files=random.randint(1, 25),
             )
             totals["prs"] += 1
             if random.random() < 0.72:
                 db.record_contribution_for_login(
-                    "github", login, OWNER, repo, "pr_merged", f"prm:{login}-{i}",
+                    "github",
+                    login,
+                    OWNER,
+                    repo,
+                    "pr_merged",
+                    f"prm:{login}-{i}",
                     event_at=opened_at + random.randint(3600, 5 * 86400),
-                    is_bot=is_bot, avatar_url=avatar, display_name=display,
-                    pr_number=i, title="feat: a change", merged=True,
-                    additions=adds, deletions=dels,
+                    is_bot=is_bot,
+                    avatar_url=avatar,
+                    display_name=display,
+                    pr_number=i,
+                    title="feat: a change",
+                    merged=True,
+                    additions=adds,
+                    deletions=dels,
                 )
                 totals["merges"] += 1
                 # Review-quality signal: Mira's review of this author's PR.
@@ -118,11 +148,15 @@ def seed() -> None:
                 blockers = random.choices([0, 0, 1, 2], weights=[5, 4, 2, 1])[0]
                 warnings = random.choices([0, 1, 2, 3], weights=[3, 4, 3, 1])[0]
                 store.record_review(
-                    pr_number=i, pr_title="feat: a change",
+                    pr_number=i,
+                    pr_title="feat: a change",
                     pr_url=f"https://github.com/{OWNER}/{repo}/pull/{i}",
-                    comments_posted=blockers + warnings, blockers=blockers,
-                    warnings=warnings, suggestions=random.randint(0, 3),
-                    files_reviewed=random.randint(1, 20), lines_changed=adds + dels,
+                    comments_posted=blockers + warnings,
+                    blockers=blockers,
+                    warnings=warnings,
+                    suggestions=random.randint(0, 3),
+                    files_reviewed=random.randint(1, 20),
+                    lines_changed=adds + dels,
                     categories=",".join(random.sample(CATEGORIES, k=random.randint(0, 2))),
                     author=login,
                 )
@@ -130,21 +164,32 @@ def seed() -> None:
                     store.record_feedback(
                         pr_number=i,
                         pr_url=f"https://github.com/{OWNER}/{repo}/pull/{i}",
-                        comment_path="src/x.py", comment_line=random.randint(1, 200),
+                        comment_path="src/x.py",
+                        comment_line=random.randint(1, 200),
                         comment_category=random.choice(CATEGORIES),
                         comment_severity=random.choice(["blocker", "warning"]),
                         comment_title="potential issue",
                         signal=random.choices(["accepted", "rejected"], weights=[3, 1])[0],
-                        actor="maintainer", pr_author=login,
+                        actor="maintainer",
+                        pr_author=login,
                     )
 
         # Reviews this person gave on others' PRs
         for i in range(n_reviews):
             repo = random.choice(REPOS)
             db.record_contribution_for_login(
-                "github", login, OWNER, repo, "review", f"review:{login}-{i}",
-                event_at=_day_epoch(), is_bot=is_bot, avatar_url=avatar,
-                display_name=display, pr_number=i, title="review",
+                "github",
+                login,
+                OWNER,
+                repo,
+                "review",
+                f"review:{login}-{i}",
+                event_at=_day_epoch(),
+                is_bot=is_bot,
+                avatar_url=avatar,
+                display_name=display,
+                pr_number=i,
+                title="review",
             )
             totals["reviews"] += 1
 
@@ -204,9 +249,16 @@ def seed_review_insights(db) -> dict:  # type: ignore[no-untyped-def]
         idle_days = random.choice([0, 1, 2, 4, 6, 9])
         updated = min(now, created + (age_days - idle_days) * DAY)
         db.upsert_pull_request(
-            OWNER, repo, pr_no, author=author, title=random.choice(_PR_TITLES),
-            url=f"https://github.com/{OWNER}/{repo}/pull/{pr_no}", state="open",
-            draft=random.random() < 0.1, created_at=created, updated_at=updated,
+            OWNER,
+            repo,
+            pr_no,
+            author=author,
+            title=random.choice(_PR_TITLES),
+            url=f"https://github.com/{OWNER}/{repo}/pull/{pr_no}",
+            state="open",
+            draft=random.random() < 0.1,
+            created_at=created,
+            updated_at=updated,
         )
         counts["open"] += 1
         if now - updated > 3 * DAY:
@@ -222,8 +274,14 @@ def seed_review_insights(db) -> dict:  # type: ignore[no-untyped-def]
                 responded = min(now, requested + latency)
                 state = random.choice(["approved", "approved", "changes_requested", "commented"])
                 db.upsert_pr_reviewer(
-                    OWNER, repo, pr_no, reviewer, requested_at=requested,
-                    responded_at=responded, state=state, bare_approval=_bare(reviewer, state),
+                    OWNER,
+                    repo,
+                    pr_no,
+                    reviewer,
+                    requested_at=requested,
+                    responded_at=responded,
+                    state=state,
+                    bare_approval=_bare(reviewer, state),
                 )
                 db.set_pr_first_review(OWNER, repo, pr_no, responded)
             else:
@@ -236,9 +294,15 @@ def seed_review_insights(db) -> dict:  # type: ignore[no-untyped-def]
         author = random.choice([r for r in logins if r != bottleneck])
         created = now - random.randint(2, 8) * DAY
         db.upsert_pull_request(
-            OWNER, repo, pr_no, author=author, title=random.choice(_PR_TITLES),
-            url=f"https://github.com/{OWNER}/{repo}/pull/{pr_no}", state="open",
-            created_at=created, updated_at=created,
+            OWNER,
+            repo,
+            pr_no,
+            author=author,
+            title=random.choice(_PR_TITLES),
+            url=f"https://github.com/{OWNER}/{repo}/pull/{pr_no}",
+            state="open",
+            created_at=created,
+            updated_at=created,
         )
         counts["open"] += 1
         if now - created > 3 * DAY:
@@ -258,9 +322,16 @@ def seed_review_insights(db) -> dict:  # type: ignore[no-untyped-def]
             ttm = ttfr + random.randint(2 * HOUR, 3 * DAY)
             created = merged - ttm
             db.upsert_pull_request(
-                OWNER, repo, pr_no, author=author, title=random.choice(_PR_TITLES),
-                url=f"https://github.com/{OWNER}/{repo}/pull/{pr_no}", state="merged",
-                created_at=created, updated_at=merged, merged_at=merged,
+                OWNER,
+                repo,
+                pr_no,
+                author=author,
+                title=random.choice(_PR_TITLES),
+                url=f"https://github.com/{OWNER}/{repo}/pull/{pr_no}",
+                state="merged",
+                created_at=created,
+                updated_at=merged,
+                merged_at=merged,
             )
             first_review = created + ttfr
             db.set_pr_first_review(OWNER, repo, pr_no, first_review)
@@ -268,8 +339,13 @@ def seed_review_insights(db) -> dict:  # type: ignore[no-untyped-def]
             reviewer = random.choice([r for r in logins if r != author])
             state = "approved" if random.random() < 0.85 else "commented"
             db.upsert_pr_reviewer(
-                OWNER, repo, pr_no, reviewer,
-                requested_at=created, responded_at=first_review, state=state,
+                OWNER,
+                repo,
+                pr_no,
+                reviewer,
+                requested_at=created,
+                responded_at=first_review,
+                state=state,
                 bare_approval=_bare(reviewer, state),
             )
             counts["merged"] += 1

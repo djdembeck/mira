@@ -117,7 +117,10 @@ def create_app(
         # ready/review_requested/...), independent of the review-trigger logic
         # below — so review-insights data stays current even for paused/ignored
         # PRs. Doesn't return; falls through to the review-trigger branches.
-        if event == "pull_request" and payload.get("sender", {}).get("login", "") != f"{bot_name}[bot]":
+        if (
+            event == "pull_request"
+            and payload.get("sender", {}).get("login", "") != f"{bot_name}[bot]"
+        ):
             background_tasks.add_task(handle_pr_review_meta, payload, app_auth, bot_name)
 
         # A human submitted a review — capture responsiveness + the review event.

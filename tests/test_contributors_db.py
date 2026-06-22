@@ -134,11 +134,21 @@ def test_get_contributor_days_respects_range(db: AppDatabase) -> None:
 def test_index_store_review_quality_by_author(tmp_path: Path) -> None:
     store = IndexStore(str(tmp_path / "idx.db"))
     store.record_review(
-        pr_number=1, pr_title="t", pr_url="u", comments_posted=3, blockers=2, warnings=1,
+        pr_number=1,
+        pr_title="t",
+        pr_url="u",
+        comments_posted=3,
+        blockers=2,
+        warnings=1,
         author="alice",
     )
     store.record_review(
-        pr_number=2, pr_title="t2", pr_url="u2", comments_posted=1, blockers=0, warnings=1,
+        pr_number=2,
+        pr_title="t2",
+        pr_url="u2",
+        comments_posted=1,
+        blockers=0,
+        warnings=1,
         author="bob",
     )
     q = store.get_review_quality_by_author("alice")
@@ -154,14 +164,28 @@ def test_index_store_feedback_quality_by_author(tmp_path: Path) -> None:
     store.record_bulk_feedback(
         [
             {
-                "pr_number": 1, "pr_url": "u", "comment_path": "a.py", "comment_line": 1,
-                "comment_category": "bug", "comment_severity": "high", "comment_title": "x",
-                "signal": "accepted", "actor": "merger", "pr_author": "alice",
+                "pr_number": 1,
+                "pr_url": "u",
+                "comment_path": "a.py",
+                "comment_line": 1,
+                "comment_category": "bug",
+                "comment_severity": "high",
+                "comment_title": "x",
+                "signal": "accepted",
+                "actor": "merger",
+                "pr_author": "alice",
             },
             {
-                "pr_number": 1, "pr_url": "u", "comment_path": "b.py", "comment_line": 2,
-                "comment_category": "bug", "comment_severity": "low", "comment_title": "y",
-                "signal": "rejected", "actor": "merger", "pr_author": "alice",
+                "pr_number": 1,
+                "pr_url": "u",
+                "comment_path": "b.py",
+                "comment_line": 2,
+                "comment_category": "bug",
+                "comment_severity": "low",
+                "comment_title": "y",
+                "signal": "rejected",
+                "actor": "merger",
+                "pr_author": "alice",
             },
         ]
     )
