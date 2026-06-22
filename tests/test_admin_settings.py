@@ -168,9 +168,7 @@ class TestEndpointValidation:
 
     def test_persists_auto_resolve_conversations_override(self, in_memory_db: AppDatabase):
         result = set_global_settings(
-            GlobalSettingsUpdate(
-                overrides={"review": {"auto_resolve_conversations": False}}
-            ),
+            GlobalSettingsUpdate(overrides={"review": {"auto_resolve_conversations": False}}),
             _admin_request(),
         )
         assert result == {"ok": True}
