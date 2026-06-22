@@ -1526,6 +1526,7 @@ class AppDatabase:
         assert self._pg_conn is not None
         with self._pg_conn.cursor() as cur:
             cur.execute(sql.replace("?", "%s"), params)
+        self._pg_conn.commit()
 
     def upsert_contributor(
         self,
@@ -1554,7 +1555,16 @@ class AppDatabase:
                 "display_name=CASE WHEN excluded.display_name!='' THEN excluded.display_name ELSE contributors.display_name END, "
                 "avatar_url=CASE WHEN excluded.avatar_url!='' THEN excluded.avatar_url ELSE contributors.avatar_url END, "
                 "is_bot=excluded.is_bot, updated_at=excluded.updated_at",
-                (provider, external_login, external_id, display_name, avatar_url, int(is_bot), now, now),
+                (
+                    provider,
+                    external_login,
+                    external_id,
+                    display_name,
+                    avatar_url,
+                    int(is_bot),
+                    now,
+                    now,
+                ),
             )
             self._sqlite_conn.commit()
         else:
@@ -1569,7 +1579,16 @@ class AppDatabase:
                     "display_name=CASE WHEN EXCLUDED.display_name!='' THEN EXCLUDED.display_name ELSE contributors.display_name END, "
                     "avatar_url=CASE WHEN EXCLUDED.avatar_url!='' THEN EXCLUDED.avatar_url ELSE contributors.avatar_url END, "
                     "is_bot=EXCLUDED.is_bot, updated_at=EXCLUDED.updated_at",
-                    (provider, external_login, external_id, display_name, avatar_url, is_bot, now, now),
+                    (
+                        provider,
+                        external_login,
+                        external_id,
+                        display_name,
+                        avatar_url,
+                        is_bot,
+                        now,
+                        now,
+                    ),
                 )
         contributor = self.get_contributor_by_login(provider, external_login)
         assert contributor is not None  # just upserted
@@ -1645,15 +1664,47 @@ class AppDatabase:
             "total=contribution_days.total+1"
         )
         insert_params = (
-            contributor_id, owner, repo, kind, external_key, pr_number, title,
-            additions, deletions, changed_files, merged, event_at, day, now,
+            contributor_id,
+            owner,
+            repo,
+            kind,
+            external_key,
+            pr_number,
+            title,
+            additions,
+            deletions,
+            changed_files,
+            merged,
+            event_at,
+            day,
+            now,
         )
-        update_params = (title, additions, deletions, changed_files, merged, owner, repo, kind, external_key)
+        update_params = (
+            title,
+            additions,
+            deletions,
+            changed_files,
+            merged,
+            owner,
+            repo,
+            kind,
+            external_key,
+        )
         if self._backend == "sqlite":
             assert self._sqlite_conn is not None
             # SQLite stores booleans as 0/1.
             ins = (*insert_params[:10], int(merged), *insert_params[11:])
-            upd = (title, additions, deletions, changed_files, int(merged), owner, repo, kind, external_key)
+            upd = (
+                title,
+                additions,
+                deletions,
+                changed_files,
+                int(merged),
+                owner,
+                repo,
+                kind,
+                external_key,
+            )
             cur = self._sqlite_conn.execute(insert_sql.format(p="?"), ins)
             inserted = cur.rowcount == 1
             if inserted:
@@ -1670,6 +1721,7 @@ class AppDatabase:
                 cur.execute(rollup_sql.format(p="%s"), (contributor_id, day))
             else:
                 cur.execute(update_sql.format(p="%s"), update_params)
+        self._pg_conn.commit()
         return inserted
 
     def record_contribution_for_login(
@@ -1932,8 +1984,18 @@ class AppDatabase:
             "merged_at=CASE WHEN excluded.merged_at>0 THEN excluded.merged_at ELSE pull_requests.merged_at END, "
             "closed_at=CASE WHEN excluded.closed_at>0 THEN excluded.closed_at ELSE pull_requests.closed_at END",
             (
-                owner, repo, number, author, title, url, state, int(draft),
-                created_at, updated_at, merged_at, closed_at,
+                owner,
+                repo,
+                number,
+                author,
+                title,
+                url,
+                state,
+                int(draft),
+                created_at,
+                updated_at,
+                merged_at,
+                closed_at,
             ),
         )
 
@@ -1999,9 +2061,16 @@ class AppDatabase:
         )
         return [
             {
-                "owner": r[0], "repo": r[1], "number": r[2], "author": r[3], "title": r[4],
-                "url": r[5], "draft": bool(r[6]), "created_at": r[7] or 0.0,
-                "updated_at": r[8] or 0.0, "first_review_at": r[9] or 0.0,
+                "owner": r[0],
+                "repo": r[1],
+                "number": r[2],
+                "author": r[3],
+                "title": r[4],
+                "url": r[5],
+                "draft": bool(r[6]),
+                "created_at": r[7] or 0.0,
+                "updated_at": r[8] or 0.0,
+                "first_review_at": r[9] or 0.0,
             }
             for r in rows
         ]
@@ -2015,8 +2084,13 @@ class AppDatabase:
         )
         return [
             {
-                "owner": r[0], "repo": r[1], "number": r[2], "reviewer": r[3],
-                "requested_at": r[4] or 0.0, "responded_at": r[5] or 0.0, "state": r[6] or "",
+                "owner": r[0],
+                "repo": r[1],
+                "number": r[2],
+                "reviewer": r[3],
+                "requested_at": r[4] or 0.0,
+                "responded_at": r[5] or 0.0,
+                "state": r[6] or "",
             }
             for r in rows
         ]
