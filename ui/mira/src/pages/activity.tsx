@@ -607,6 +607,7 @@ export function ActivityPage() {
                           <AuthorAvatar
                             username={g.author_username}
                             avatarUrl={g.author_avatar_url}
+                            className="h-5 w-5"
                           />
                           <span className="truncate text-xs text-muted-foreground">
                             {g.author_username || "—"}
@@ -854,7 +855,7 @@ function ConversationTimeline({ detail }: { detail: ActivityDetailModel }) {
   const items: TimelineItem[] = [
     ...detail.reviews.map((r) => ({ kind: "review" as const, at: r.created_at, review: r })),
     ...detail.replies.map((r) => ({ kind: "reply" as const, at: r.created_at, reply: r })),
-  ].sort((a, b) => a.at - b.at)
+  ].sort((a, b) => b.at - a.at) // newest first
 
   if (items.length === 0) {
     return <div className="text-xs text-muted-foreground">No activity recorded.</div>
