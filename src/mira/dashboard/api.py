@@ -2201,9 +2201,7 @@ def list_activity(limit: int = 200, repo: str = "", q: str = "") -> ActivityResp
             try:
                 for e in store.list_review_events(limit=500):
                     if terms:
-                        haystack = (
-                            f"{e.pr_title} #{e.pr_number} {slug} {e.categories}".lower()
-                        )
+                        haystack = f"{e.pr_title} #{e.pr_number} {slug} {e.categories}".lower()
                         if not all(t in haystack for t in terms):
                             continue
                     events.append(
@@ -2229,9 +2227,7 @@ def list_activity(limit: int = 200, repo: str = "", q: str = "") -> ActivityResp
             finally:
                 store.close()
         except Exception:
-            logger.warning(
-                "Failed to read activity for %s", slug, exc_info=True
-            )
+            logger.warning("Failed to read activity for %s", slug, exc_info=True)
 
     events.sort(key=lambda ev: ev.created_at, reverse=True)
     return ActivityResponse(events=events[:limit], repos=repo_slugs)
