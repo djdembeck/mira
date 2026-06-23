@@ -61,31 +61,87 @@ const chartConfig = {
   comments: { label: "Issues", color: "var(--chart-2)" },
 } satisfies ChartConfig
 
+// ── PR grouping ──────────────────────────────────────────────────────────
+// review_events stores one row per review *pass*; a PR is typically reviewed
+// several times as commits land. We collapse passes into one PR row, keeping
+// the individual reviews to render as a timeline in the detail panel.
+
+type PRGroup = {
+  key: string
+  owner: string
+  repo: string
+  pr_number: number
+  pr_title: string
+  pr_url: string
+  reviews: ActivityEventModel[] // newest first
+  latest: ActivityEventModel
+  reviewCount: number
+  firstReviewedAt: number
+  lastReviewedAt: number
+  categories: string // union across passes
+}
+
+function groupByPR(events: ActivityEventModel[]): PRGroup[] {
+  const map = new Map<string, ActivityEventModel[]>()
+  for (const e of events) {
+    const key = e.pr_url || `${e.owner}/${e.repo}#${e.pr_number}`
+    const arr = map.get(key)
+    if (arr) arr.push(e)
+    else map.set(key, [e])
+  }
+  const groups: PRGroup[] = []
+  for (const [key, evs] of map) {
+    const reviews = [...evs].sort((a, b) => b.created_at - a.created_at)
+    const latest = reviews[0]
+    const cats = new Set<string>()
+    for (const r of reviews) splitCategories(r.categories).forEach((c) => cats.add(c))
+    groups.push({
+      key,
+      owner: latest.owner,
+      repo: latest.repo,
+      pr_number: latest.pr_number,
+      pr_title: latest.pr_title,
+      pr_url: latest.pr_url,
+      reviews,
+      latest,
+      reviewCount: reviews.length,
+      firstReviewedAt: reviews[reviews.length - 1].created_at,
+      lastReviewedAt: latest.created_at,
+      categories: Array.from(cats).sort().join(", "),
+    })
+  }
+  return groups
+}
+
 type SortKey =
   | "repo"
   | "pr_number"
-  | "created_at"
-  | "comments_posted"
+  | "reviews"
+  | "last_reviewed"
+  | "comments"
   | "severity"
 type SortDir = "asc" | "desc"
 
-// Rank a row by severity: blockers dominate, then warnings, then suggestions.
+// Rank a review by severity: blockers dominate, then warnings, then suggestions.
 function severityWeight(e: ActivityEventModel) {
   return e.blockers * 1_000_000 + e.warnings * 1_000 + e.suggestions
 }
 
-function sortValue(e: ActivityEventModel, key: SortKey): string | number {
+// Table columns reflect the PR's current state — i.e. its latest review pass.
+function prSortValue(g: PRGroup, key: SortKey): string | number {
   switch (key) {
     case "repo":
-      return `${e.owner}/${e.repo}`.toLowerCase()
+      return `${g.owner}/${g.repo}`.toLowerCase()
     case "pr_number":
-      return e.pr_number
-    case "created_at":
-      return e.created_at
-    case "comments_posted":
-      return e.comments_posted
+      return g.pr_number
+    case "reviews":
+      return g.reviewCount
+    case "last_reviewed":
+      return g.lastReviewedAt
+    case "comments":
+      return g.latest.comments_posted
     case "severity":
-      return severityWeight(e)
+      return severityWeight(g.latest)
   }
 }
 
@@ -116,6 +172,10 @@ function formatTimestamp(epochSeconds: number) {
   return new Date(epochSeconds * 1000).toLocaleString()
 }
 
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`
+}
+
 function splitCategories(categories: string): string[] {
   return categories
     .split(",")
@@ -125,9 +185,9 @@ function splitCategories(categories: string): string[] {
 
 function SeverityBadges({ event }: { event: ActivityEventModel }) {
   const parts: { label: string; kind: keyof typeof SEVERITY_PILL }[] = []
-  if (event.blockers > 0) parts.push({ label: `${event.blockers} blocker${event.blockers > 1 ? "s" : ""}`, kind: "blocker" })
-  if (event.warnings > 0) parts.push({ label: `${event.warnings} warning${event.warnings > 1 ? "s" : ""}`, kind: "warning" })
-  if (event.suggestions > 0) parts.push({ label: `${event.suggestions} suggestion${event.suggestions > 1 ? "s" : ""}`, kind: "suggestion" })
+  if (event.blockers > 0) parts.push({ label: plural(event.blockers, "blocker"), kind: "blocker" })
+  if (event.warnings > 0) parts.push({ label: plural(event.warnings, "warning"), kind: "warning" })
+  if (event.suggestions > 0) parts.push({ label: plural(event.suggestions, "suggestion"), kind: "suggestion" })
   if (parts.length === 0) return <span className="text-muted-foreground">—</span>
   return (
     <div className="flex flex-wrap gap-1">
@@ -147,14 +207,14 @@ export function ActivityPage() {
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [repo, setRepo] = useState<string>(ALL_REPOS)
-  // `selected` holds the row being shown; `panelOpen` drives the slide
+  // `selected` holds the PR being shown; `panelOpen` drives the slide
   // animation. We keep `selected` set during the close transition so the
   // content doesn't vanish before the panel finishes sliding out.
-  const [selected, setSelected] = useState<ActivityEventModel | null>(null)
+  const [selected, setSelected] = useState<PRGroup | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
 
-  const openDetail = (e: ActivityEventModel) => {
-    setSelected(e)
+  const openDetail = (g: PRGroup) => {
+    setSelected(g)
     setPanelOpen(true)
   }
   const closeDetail = () => setPanelOpen(false)
@@ -183,6 +243,7 @@ export function ActivityPage() {
   const { data: activity, loading } = useAsync(
     () =>
       api.listActivity({
+        limit: 1000,
         q: debouncedSearch || undefined,
         repo: repo === ALL_REPOS ? undefined : repo,
       }),
@@ -193,22 +254,24 @@ export function ActivityPage() {
   // Keep the repo list stable across searches: prefer the unfiltered list.
   const repos = useMemo(() => activity?.repos ?? [], [activity?.repos])
 
-  // Client-side sort over the (≤200-row) result set. Default: newest first.
+  const prs = useMemo(() => groupByPR(events), [events])
+
+  // Client-side sort over the grouped PRs. Default: most recently reviewed.
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
-    key: "created_at",
+    key: "last_reviewed",
     dir: "desc",
   })
 
-  const sortedEvents = useMemo(() => {
+  const sortedPRs = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1
-    return [...events].sort((a, b) => {
-      const av = sortValue(a, sort.key)
-      const bv = sortValue(b, sort.key)
+    return [...prs].sort((a, b) => {
+      const av = prSortValue(a, sort.key)
+      const bv = prSortValue(b, sort.key)
       if (av < bv) return -1 * dir
       if (av > bv) return 1 * dir
       return 0
     })
-  }, [events, sort])
+  }, [prs, sort])
 
   const toggleSort = (key: SortKey) =>
     setSort((s) =>
@@ -273,8 +336,8 @@ export function ActivityPage() {
         </CardContent>
       </Card>
 
-      {/* Search + repo filter */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {/* Search + repo filter — sticky so it stays reachable while scrolling. */}
+      <div className="sticky top-0 z-20 -mx-6 flex flex-col gap-2 border-b bg-background px-6 py-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -299,16 +362,16 @@ export function ActivityPage() {
         </Select>
       </div>
 
-      {/* Table */}
+      {/* Table — one row per PR */}
       {loading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
-      ) : events.length === 0 ? (
+      ) : prs.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
             <ActivityIcon className="h-8 w-8 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
               {debouncedSearch || repo !== ALL_REPOS
-                ? "No reviews match your filters."
+                ? "No PRs match your filters."
                 : "Mira hasn't reviewed any PRs yet."}
             </p>
           </CardContent>
@@ -320,52 +383,48 @@ export function ActivityPage() {
               <TableRow>
                 <SortHead label="Repo" sortKey="repo" sort={sort} onSort={toggleSort} />
                 <SortHead label="PR" sortKey="pr_number" sort={sort} onSort={toggleSort} />
-                <SortHead label="When" sortKey="created_at" sort={sort} onSort={toggleSort} />
-                <SortHead
-                  label="Comments"
-                  sortKey="comments_posted"
-                  sort={sort}
-                  onSort={toggleSort}
-                  align="right"
-                />
+                <SortHead label="Reviews" sortKey="reviews" sort={sort} onSort={toggleSort} align="right" />
+                <SortHead label="Last reviewed" sortKey="last_reviewed" sort={sort} onSort={toggleSort} />
+                <SortHead label="Comments" sortKey="comments" sort={sort} onSort={toggleSort} align="right" />
                 <SortHead label="Severity" sortKey="severity" sort={sort} onSort={toggleSort} />
                 <TableHead>Categories</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedEvents.map((e) => (
+              {sortedPRs.map((g) => (
                 <TableRow
-                  key={`${e.owner}/${e.repo}#${e.id}`}
-                  data-active={
-                    panelOpen && selected?.id === e.id && selected?.repo === e.repo
-                  }
+                  key={g.key}
+                  data-active={panelOpen && selected?.key === g.key}
                   className="cursor-pointer data-[active=true]:bg-muted/60"
-                  onClick={() => openDetail(e)}
+                  onClick={() => openDetail(g)}
                 >
                   <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
-                    {e.owner}/{e.repo}
+                    {g.owner}/{g.repo}
                   </TableCell>
                   <TableCell className="max-w-xs">
                     <div className="flex items-center gap-2">
                       <GitHubIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="font-medium">#{e.pr_number}</span>
+                      <span className="font-medium">#{g.pr_number}</span>
                       <span className="truncate text-muted-foreground">
-                        {e.pr_title}
+                        {g.pr_title}
                       </span>
                     </div>
                   </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {g.reviewCount}
+                  </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {relativeTime(e.created_at)}
+                    {relativeTime(g.lastReviewedAt)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {e.comments_posted}
+                    {g.latest.comments_posted}
                   </TableCell>
                   <TableCell>
-                    <SeverityBadges event={e} />
+                    <SeverityBadges event={g.latest} />
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
-                      {splitCategories(e.categories).map((c) => (
+                      {splitCategories(g.categories).map((c) => (
                         <Badge key={c} variant="secondary" className={PILL_RING}>
                           {c}
                         </Badge>
@@ -411,7 +470,8 @@ export function ActivityPage() {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selected.owner}/{selected.repo} ·{" "}
-                  {formatTimestamp(selected.created_at)}
+                  {plural(selected.reviewCount, "review")} · last{" "}
+                  {relativeTime(selected.lastReviewedAt)}
                 </p>
               </div>
               <Button
@@ -424,41 +484,69 @@ export function ActivityPage() {
               </Button>
             </div>
 
-            <div className="flex-1 space-y-6 overflow-y-auto p-6">
-              <div>
-                <h3 className="mb-2 text-xs font-medium uppercase text-muted-foreground">
-                  Findings
-                </h3>
-                <SeverityBadges event={selected} />
-              </div>
-
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-                <Stat label="Comments posted" value={selected.comments_posted} />
-                <Stat label="Files reviewed" value={selected.files_reviewed} />
-                <Stat label="Lines changed" value={selected.lines_changed.toLocaleString()} />
-                <Stat label="Tokens used" value={selected.tokens_used.toLocaleString()} />
-                <Stat label="Duration" value={`${(selected.duration_ms / 1000).toFixed(1)}s`} />
-              </dl>
-
-              {splitCategories(selected.categories).length > 0 && (
-                <div>
-                  <h3 className="mb-2 text-xs font-medium uppercase text-muted-foreground">
-                    Categories
-                  </h3>
-                  <div className="flex flex-wrap gap-1">
-                    {splitCategories(selected.categories).map((c) => (
-                      <Badge key={c} variant="secondary" className={PILL_RING}>
-                        {c}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
+            <div className="flex-1 overflow-y-auto p-6">
+              <h3 className="mb-4 text-xs font-medium uppercase text-muted-foreground">
+                Timeline
+              </h3>
+              <ReviewTimeline reviews={selected.reviews} />
             </div>
           </>
         )}
       </div>
     </div>
+  )
+}
+
+// Vertical timeline of a PR's review passes, newest first. The dot and the
+// connecting line live in one centered gutter column so the line always runs
+// straight through the middle of each dot.
+function ReviewTimeline({ reviews }: { reviews: ActivityEventModel[] }) {
+  return (
+    <ol>
+      {reviews.map((r, i) => {
+        const last = i === reviews.length - 1
+        return (
+          <li key={r.id} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-primary ring-4 ring-background" />
+              {!last && <span className="w-px grow bg-border" />}
+            </div>
+            <div className={cn("flex-1", last ? "pb-1" : "pb-6")}>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm font-medium">
+                  Reviewed {plural(r.files_reviewed, "file")}
+                </span>
+                <span
+                  className="shrink-0 text-xs text-muted-foreground"
+                  title={formatTimestamp(r.created_at)}
+                >
+                  {relativeTime(r.created_at)}
+                </span>
+              </div>
+
+              <div className="mt-2">
+                <SeverityBadges event={r} />
+              </div>
+
+              {splitCategories(r.categories).length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {splitCategories(r.categories).map((c) => (
+                    <Badge key={c} variant="secondary" className={PILL_RING}>
+                      {c}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-2 text-xs text-muted-foreground">
+                {plural(r.comments_posted, "comment")} · {r.lines_changed.toLocaleString()} lines ·{" "}
+                {r.tokens_used.toLocaleString()} tokens · {(r.duration_ms / 1000).toFixed(1)}s
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 
@@ -498,14 +586,5 @@ function SortHead({
         />
       </button>
     </TableHead>
-  )
-}
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-sm font-medium tabular-nums">{value}</dd>
-    </div>
   )
 }
