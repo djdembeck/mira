@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
-import { CartesianGrid, Line, LineChart, XAxis } from "recharts"
+import { Area, AreaChart, CartesianGrid, XAxis } from "recharts"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,6 +20,8 @@ import { GitHubIcon } from "@/components/ui/github-icon"
 import {
   type ChartConfig,
   ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
@@ -463,10 +465,20 @@ export function ActivityPage() {
       <Card className="shrink-0">
         <CardContent className="pt-6">
           {chartLoading ? (
-            <Skeleton className="h-[140px] w-full" />
+            <Skeleton className="h-[160px] w-full" />
           ) : timeseries && timeseries.length > 0 ? (
-            <ChartContainer config={chartConfig} className="h-[140px] w-full">
-              <LineChart data={timeseries}>
+            <ChartContainer config={chartConfig} className="h-[160px] w-full">
+              <AreaChart data={timeseries} margin={{ left: 4, right: 4, top: 4 }}>
+                <defs>
+                  <linearGradient id="fillReviews" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-reviews)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-reviews)" stopOpacity={0.05} />
+                  </linearGradient>
+                  <linearGradient id="fillComments" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-comments)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-comments)" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -476,12 +488,27 @@ export function ActivityPage() {
                   tickFormatter={formatChartDate}
                 />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Line type="monotone" dataKey="reviews" stroke="var(--color-reviews)" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="comments" stroke="var(--color-comments)" strokeWidth={2} dot={false} />
-              </LineChart>
+                <Area
+                  type="monotone"
+                  dataKey="reviews"
+                  stroke="var(--color-reviews)"
+                  fill="url(#fillReviews)"
+                  strokeWidth={2}
+                  stackId="a"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="comments"
+                  stroke="var(--color-comments)"
+                  fill="url(#fillComments)"
+                  strokeWidth={2}
+                  stackId="a"
+                />
+                <ChartLegend content={<ChartLegendContent />} />
+              </AreaChart>
             </ChartContainer>
           ) : (
-            <div className="flex h-[140px] items-center justify-center text-sm text-muted-foreground">
+            <div className="flex h-[160px] items-center justify-center text-sm text-muted-foreground">
               No review activity yet.
             </div>
           )}
