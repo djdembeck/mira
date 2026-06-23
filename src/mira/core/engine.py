@@ -581,6 +581,7 @@ class ReviewEngine:
             llm_resolved,
         )
 
+        posted_comment_ids: list[int] = []
         if result.comments:
             if self.dry_run:
                 logger.info(
@@ -589,7 +590,9 @@ class ReviewEngine:
                     pr_info.url,
                 )
             else:
-                await self.provider.post_review(pr_info, result, bot_name=self.bot_name)
+                posted_comment_ids = (
+                    await self.provider.post_review(pr_info, result, bot_name=self.bot_name) or []
+                )
         else:
             logger.info("No code suggestions for PR %s", pr_info.url)
 
@@ -642,8 +645,11 @@ class ReviewEngine:
                         "category": c.category,
                         "title": c.title,
                         "body": c.body,
+                        "github_comment_id": posted_comment_ids[i]
+                        if i < len(posted_comment_ids)
+                        else 0,
                     }
-                    for c in result.comments
+                    for i, c in enumerate(result.comments)
                 ],
             )
             try:

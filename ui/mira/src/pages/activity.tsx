@@ -888,35 +888,60 @@ const SEV_DOT: Record<string, string> = {
   nitpick: "bg-sky-500",
 }
 
-type ReviewThread = { review: ActivityReviewModel; replies: PRReplyModel[] }
+// Map of github_comment_id -> human replies to that exact Mira comment.
+type RepliesByComment = Map<number, PRReplyModel[]>
+type ReviewThread = {
+  review: ActivityReviewModel
+  repliesByComment: RepliesByComment
+  looseReplies: PRReplyModel[] // replies not tied to a specific comment
+}
 
-// The timeline as a stack of self-contained threads — one card per review
-// pass, with that pass's human replies nested beneath it. Threads run
-// newest-first; replies within a thread stay chronological. Each thread is
-// visually separated rather than strung along one continuous line.
+// The timeline as threads — one node per review pass. Human replies are
+// nested under the exact Mira comment they answer (matched by
+// in_reply_to_id → comment.github_comment_id, GitHub-style). Replies we can't
+// tie to a comment fall back to the pass they most likely belong to.
 function ConversationTimeline({ detail }: { detail: ActivityDetailModel }) {
   const threads: ReviewThread[] = useMemo(() => {
-    const passesAsc = [...detail.reviews].sort((a, b) => a.created_at - b.created_at)
-    // Attach each reply to the latest pass that precedes it (falling back to the
-    // earliest pass for replies older than every pass).
-    const repliesByReview = new Map<number, PRReplyModel[]>()
-    for (const reply of detail.replies) {
-      if (passesAsc.length === 0) break
-      let target = passesAsc[0]
-      for (const p of passesAsc) {
-        if (p.created_at <= reply.created_at) target = p
-        else break
+    // Which review pass owns each comment id.
+    const reviewIdForComment = new Map<number, number>()
+    for (const r of detail.reviews) {
+      for (const c of r.comments) {
+        if (c.github_comment_id) reviewIdForComment.set(c.github_comment_id, r.id)
       }
-      const arr = repliesByReview.get(target.id) ?? []
-      arr.push(reply)
-      repliesByReview.set(target.id, arr)
     }
+
+    const byComment: RepliesByComment = new Map()
+    const looseByReview = new Map<number, PRReplyModel[]>()
+    const passesAsc = [...detail.reviews].sort((a, b) => a.created_at - b.created_at)
+
+    for (const reply of detail.replies) {
+      const owns =
+        reply.in_reply_to_id && reviewIdForComment.has(reply.in_reply_to_id)
+      if (owns) {
+        const arr = byComment.get(reply.in_reply_to_id) ?? []
+        arr.push(reply)
+        byComment.set(reply.in_reply_to_id, arr)
+      } else if (passesAsc.length > 0) {
+        // Fallback: attach to the latest pass that precedes the reply.
+        let target = passesAsc[0]
+        for (const p of passesAsc) {
+          if (p.created_at <= reply.created_at) target = p
+          else break
+        }
+        const arr = looseByReview.get(target.id) ?? []
+        arr.push(reply)
+        looseByReview.set(target.id, arr)
+      }
+    }
+
+    for (const arr of byComment.values()) arr.sort((a, b) => a.created_at - b.created_at)
 
     return [...detail.reviews]
       .sort((a, b) => b.created_at - a.created_at)
       .map((review) => ({
         review,
-        replies: (repliesByReview.get(review.id) ?? []).sort(
+        repliesByComment: byComment,
+        looseReplies: (looseByReview.get(review.id) ?? []).sort(
           (a, b) => a.created_at - b.created_at,
         ),
       }))
@@ -937,10 +962,10 @@ function ConversationTimeline({ detail }: { detail: ActivityDetailModel }) {
               {!last && <span className="w-px grow bg-border" />}
             </div>
             <div className={cn("flex-1", last ? "pb-1" : "pb-8")}>
-              <ReviewEntry review={t.review} />
-              {t.replies.length > 0 && (
+              <ReviewEntry review={t.review} repliesByComment={t.repliesByComment} />
+              {t.looseReplies.length > 0 && (
                 <div className="mt-3 space-y-2">
-                  {t.replies.map((r) => (
+                  {t.looseReplies.map((r) => (
                     <ReplyEntry key={r.id} reply={r} />
                   ))}
                 </div>
@@ -953,7 +978,13 @@ function ConversationTimeline({ detail }: { detail: ActivityDetailModel }) {
   )
 }
 
-function ReviewEntry({ review }: { review: ActivityReviewModel }) {
+function ReviewEntry({
+  review,
+  repliesByComment,
+}: {
+  review: ActivityReviewModel
+  repliesByComment?: RepliesByComment
+}) {
   return (
     <>
       <div className="flex items-center justify-between gap-2">
@@ -999,6 +1030,20 @@ function ReviewEntry({ review }: { review: ActivityReviewModel }) {
                   {c.body}
                 </div>
               )}
+              {/* Human replies threaded under this exact comment. */}
+              {(() => {
+                const reps = c.github_comment_id
+                  ? repliesByComment?.get(c.github_comment_id)
+                  : undefined
+                if (!reps || reps.length === 0) return null
+                return (
+                  <div className="mt-2 space-y-2 pl-[0.875rem]">
+                    {reps.map((r) => (
+                      <ReplyEntry key={r.id} reply={r} />
+                    ))}
+                  </div>
+                )
+              })()}
             </li>
           ))}
         </ul>

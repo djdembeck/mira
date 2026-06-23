@@ -183,6 +183,7 @@ export interface ReviewCommentModel {
   category: string
   title: string
   body: string
+  github_comment_id: number
   created_at: number
 }
 

@@ -210,6 +210,7 @@ class ReviewCommentModel(BaseModel):
     category: str
     title: str
     body: str
+    github_comment_id: int = 0
     created_at: float
 
 
@@ -2303,6 +2304,7 @@ def get_activity_detail(owner: str, repo: str, pr_number: int) -> ActivityDetail
                     category=c.category,
                     title=c.title,
                     body=c.body,
+                    github_comment_id=c.github_comment_id,
                     created_at=c.created_at,
                 )
             )
