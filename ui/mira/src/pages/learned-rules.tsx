@@ -1,6 +1,11 @@
 import {
   Brain,
   Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsUpDown,
+  ChevronUp,
   Clock,
   Pencil,
   Plus,
@@ -9,12 +14,13 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ConfirmButton } from "@/components/ui/confirm-button"
+import { GitHubIcon } from "@/components/ui/github-icon"
 import {
   Dialog,
   DialogContent,
@@ -52,8 +58,11 @@ import { useAsync, useDocumentTitle } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
 
 const ALL_REPOS = "__all__"
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 
 type RuleDraft = { rule_text: string; category: string; path_pattern: string }
+type SortKey = "repo" | "learning" | "status"
+type SortDir = "asc" | "desc"
 
 export function LearnedRulesPage() {
   useDocumentTitle("Learnings")
@@ -133,6 +142,10 @@ export function LearnedRulesPage() {
     </div>
   )
 
+  // Only show the full-page loader on first load — refetches (after an
+  // approve/edit) keep the current table mounted so it doesn't flicker.
+  const firstLoad = loading && !rules
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -150,12 +163,15 @@ export function LearnedRulesPage() {
         )}
       </div>
 
-      {loading ? (
+      {firstLoad ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
       ) : !isAdmin ? (
         <div className="space-y-3">
           {filters}
-          <LearningsTable rows={applyFilter(approved)} />
+          <LearningsTable
+            rows={applyFilter(approved)}
+            resetKey={`${query}|${repoFilter}`}
+          />
         </div>
       ) : (
         <Tabs value={tab} onValueChange={(v) => setTab(v as "approved" | "pending")}>
@@ -177,38 +193,40 @@ export function LearnedRulesPage() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="approved" className="mt-4 space-y-3">
+          <div className="mt-4">{filters}</div>
+
+          <TabsContent value="approved" className="mt-3 space-y-2">
             {pending.length > 0 && (
               <button
                 onClick={() => setTab("pending")}
-                className="flex w-full items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-700 transition-colors hover:bg-amber-500/15 dark:text-amber-400"
+                className="flex w-full items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-left text-xs text-amber-700 transition-colors hover:bg-amber-500/15 dark:text-amber-400"
               >
-                <Clock className="h-4 w-4 shrink-0" />
+                <Clock className="h-3 w-3 shrink-0" />
                 <span>
-                  <span className="font-medium">{pending.length}</span> learning
-                  {pending.length !== 1 ? "s" : ""} awaiting approval
+                  <span className="font-medium">{pending.length}</span> awaiting
+                  approval
                 </span>
-                <span className="ml-auto font-medium">Review queue →</span>
+                <span className="ml-auto font-medium">Review →</span>
               </button>
             )}
-            {filters}
             <LearningsTable
               rows={applyFilter(approved)}
               admin
               tab="approved"
               onEdit={setEditing}
               onAct={act}
+              resetKey={`approved|${query}|${repoFilter}`}
             />
           </TabsContent>
 
-          <TabsContent value="pending" className="mt-4 space-y-3">
-            {filters}
+          <TabsContent value="pending" className="mt-3">
             <LearningsTable
               rows={applyFilter(pending)}
               admin
               tab="pending"
               onEdit={setEditing}
               onAct={act}
+              resetKey={`pending|${query}|${repoFilter}`}
             />
           </TabsContent>
         </Tabs>
@@ -234,19 +252,67 @@ export function LearnedRulesPage() {
   )
 }
 
+function sortValue(r: OrgLearnedRuleModel, key: SortKey, tab?: string): string {
+  switch (key) {
+    case "repo":
+      return `${r.owner}/${r.repo}`.toLowerCase()
+    case "learning":
+      return r.rule_text.toLowerCase()
+    case "status":
+      return tab === "pending" ? "pending" : r.active ? "enabled" : "disabled"
+  }
+}
+
 function LearningsTable({
   rows,
   admin = false,
   tab,
   onEdit,
   onAct,
+  resetKey,
 }: {
   rows: OrgLearnedRuleModel[]
   admin?: boolean
   tab?: "approved" | "pending"
   onEdit?: (r: OrgLearnedRuleModel) => void
   onAct?: (fn: () => Promise<unknown>) => void
+  resetKey: string
 }) {
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
+    key: "repo",
+    dir: "asc",
+  })
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(20)
+
+  useEffect(() => {
+    setPage(0)
+  }, [resetKey, sort.key, sort.dir, pageSize])
+
+  const toggleSort = (key: SortKey) =>
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" },
+    )
+
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1
+    return [...rows].sort((a, b) => {
+      const av = sortValue(a, sort.key, tab)
+      const bv = sortValue(b, sort.key, tab)
+      if (av < bv) return -1 * dir
+      if (av > bv) return 1 * dir
+      return 0
+    })
+  }, [rows, sort, tab])
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
+  const safePage = Math.min(page, totalPages - 1)
+  const paged = sorted.slice(safePage * pageSize, safePage * pageSize + pageSize)
+  const rangeStart = sorted.length === 0 ? 0 : safePage * pageSize + 1
+  const rangeEnd = Math.min(sorted.length, safePage * pageSize + pageSize)
+
   if (rows.length === 0) {
     return (
       <Card>
@@ -263,16 +329,20 @@ function LearningsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-48">Repo</TableHead>
-            <TableHead>Learning</TableHead>
+            <SortHead label="Repo" sortKey="repo" sort={sort} onSort={toggleSort} className="w-56" />
+            <SortHead label="Learning" sortKey="learning" sort={sort} onSort={toggleSort} />
+            <SortHead label="Status" sortKey="status" sort={sort} onSort={toggleSort} className="w-28" />
             {admin && <TableHead className="w-px text-right">Actions</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((r) => (
+          {paged.map((r) => (
             <TableRow key={`${r.owner}/${r.repo}#${r.id}`}>
               <TableCell className="whitespace-nowrap align-top font-mono text-xs text-muted-foreground">
-                {r.owner}/{r.repo}
+                <span className="flex items-center gap-1.5">
+                  <GitHubIcon className="h-3.5 w-3.5 shrink-0" />
+                  {r.owner}/{r.repo}
+                </span>
               </TableCell>
               <TableCell className="align-top">
                 <div
@@ -283,11 +353,15 @@ function LearningsTable({
                 >
                   {r.rule_text}
                 </div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  {r.category}
-                  {r.path_pattern ? ` · ${r.path_pattern}` : ""}
-                  {admin && tab === "approved" && !r.active ? " · disabled" : ""}
-                </div>
+                {(r.category || r.path_pattern) && (
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    {r.category}
+                    {r.path_pattern ? ` · ${r.path_pattern}` : ""}
+                  </div>
+                )}
+              </TableCell>
+              <TableCell className="align-top">
+                <StatusBadge rule={r} tab={tab} />
               </TableCell>
               {admin && onAct && (
                 <TableCell className="align-top text-right whitespace-nowrap">
@@ -355,7 +429,122 @@ function LearningsTable({
           ))}
         </TableBody>
       </Table>
+
+      <div className="flex items-center justify-between gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-3">
+          <span>
+            {rangeStart}–{rangeEnd} of {sorted.length}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <span>Rows:</span>
+            <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+              <SelectTrigger className="h-7 w-[4.25rem] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="tabular-nums">
+            Page {safePage + 1} / {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={safePage === 0}
+            aria-label="Previous page"
+          >
+            <ChevronLeft />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={safePage >= totalPages - 1}
+            aria-label="Next page"
+          >
+            <ChevronRight />
+          </Button>
+        </div>
+      </div>
     </Card>
+  )
+}
+
+function StatusBadge({
+  rule,
+  tab,
+}: {
+  rule: OrgLearnedRuleModel
+  tab?: "approved" | "pending"
+}) {
+  if (tab === "pending") {
+    return (
+      <Badge
+        variant="outline"
+        className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+      >
+        Pending
+      </Badge>
+    )
+  }
+  return rule.active ? (
+    <Badge
+      variant="outline"
+      className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+    >
+      Enabled
+    </Badge>
+  ) : (
+    <Badge variant="outline" className="text-muted-foreground">
+      Disabled
+    </Badge>
+  )
+}
+
+function SortHead({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string
+  sortKey: SortKey
+  sort: { key: SortKey; dir: SortDir }
+  onSort: (key: SortKey) => void
+  className?: string
+}) {
+  const active = sort.key === sortKey
+  const Icon = active ? (sort.dir === "asc" ? ChevronUp : ChevronDown) : ChevronsUpDown
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        aria-label={`Sort by ${label}`}
+        className={cn(
+          "inline-flex items-center gap-1 transition-colors hover:text-foreground",
+          active ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {label}
+        <Icon
+          className={cn(
+            "h-3.5 w-3.5",
+            active ? "text-foreground" : "text-muted-foreground/50",
+          )}
+        />
+      </button>
+    </TableHead>
   )
 }
 
