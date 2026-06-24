@@ -1,5 +1,6 @@
 import { Brain } from "lucide-react"
 import { useEffect, useState } from "react"
+import { useNavigate } from "react-router"
 import {
   Area,
   AreaChart,
@@ -27,7 +28,14 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
+import { GitHubIcon } from "@/components/ui/github-icon"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableRow,
+} from "@/components/ui/table"
 import { api, type OrgLearnedRuleModel } from "@/lib/api"
 import { useAsync, useDocumentTitle } from "@/lib/hooks"
 
@@ -572,11 +580,12 @@ function CategoryBarChart({ categories }: { categories: Record<string, number> }
 }
 
 function PendingLearningsCard({ rules }: { rules: OrgLearnedRuleModel[] }) {
+  const navigate = useNavigate()
   const top = rules.slice(0, 3)
   const more = rules.length - top.length
   const href = "/learnings?tab=pending"
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -595,25 +604,34 @@ function PendingLearningsCard({ rules }: { rules: OrgLearnedRuleModel[] }) {
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-1">
-        {top.map((r) => (
-          <a
-            key={`${r.owner}/${r.repo}#${r.id}`}
-            href={href}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted"
-          >
-            <span className="shrink-0 font-mono text-xs text-muted-foreground">
-              {r.owner}/{r.repo}
-            </span>
-            <span className="truncate text-muted-foreground">{r.rule_text}</span>
-          </a>
-        ))}
+      <CardContent className="px-0 pb-0">
+        <Table>
+          <TableBody>
+            {top.map((r) => (
+              <TableRow
+                key={`${r.owner}/${r.repo}#${r.id}`}
+                className="cursor-pointer"
+                onClick={() => navigate(href)}
+              >
+                <TableCell className="w-px whitespace-nowrap font-mono text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5">
+                    <GitHubIcon className="h-3.5 w-3.5 shrink-0" />
+                    {r.owner}/{r.repo}
+                  </span>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  <span className="line-clamp-1">{r.rule_text}</span>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
         {more > 0 && (
           <a
             href={href}
-            className="block px-2 pt-1 text-xs font-medium text-muted-foreground hover:underline"
+            className="block border-t px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
           >
-            +{more} more
+            +{more} more pending
           </a>
         )}
       </CardContent>
