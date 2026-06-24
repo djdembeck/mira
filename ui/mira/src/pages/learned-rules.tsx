@@ -206,7 +206,7 @@ export function LearnedRulesPage() {
                   <span className="font-medium">{pending.length}</span> awaiting
                   approval
                 </span>
-                <span className="font-medium">· Review →</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0" />
               </button>
             )}
             <LearningsTable
@@ -389,18 +389,36 @@ function LearningsTable({
                     </div>
                   ) : (
                     <div className="flex justify-end gap-0.5">
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        title={r.active ? "Disable" : "Enable"}
-                        onClick={() =>
-                          onAct(() =>
-                            api.setLearnedRuleActive(r.owner, r.repo, r.id, !r.active),
-                          )
-                        }
-                      >
-                        <Power className="h-3.5 w-3.5" />
-                      </Button>
+                      {r.active ? (
+                        <ConfirmButton
+                          size="icon-sm"
+                          variant="ghost"
+                          tooltip="Disable"
+                          dialogTitle="Disable learning?"
+                          dialogDescription="It will stop influencing reviews until you re-enable it."
+                          confirmLabel="Disable"
+                          onConfirm={() =>
+                            onAct(() =>
+                              api.setLearnedRuleActive(r.owner, r.repo, r.id, false),
+                            )
+                          }
+                        >
+                          <Power className="h-3.5 w-3.5" />
+                        </ConfirmButton>
+                      ) : (
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          title="Enable"
+                          onClick={() =>
+                            onAct(() =>
+                              api.setLearnedRuleActive(r.owner, r.repo, r.id, true),
+                            )
+                          }
+                        >
+                          <Power className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                       <Button
                         size="icon-sm"
                         variant="ghost"
