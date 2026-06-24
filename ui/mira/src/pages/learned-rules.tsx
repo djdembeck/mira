@@ -258,7 +258,10 @@ export function LearnedRulesPage() {
           <SelectItem value={ALL_REPOS}>All repos</SelectItem>
           {repoOptions.map((r) => (
             <SelectItem key={r} value={r}>
-              {r}
+              <span className="flex items-center gap-1.5">
+                <GitHubIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                {r}
+              </span>
             </SelectItem>
           ))}
         </SelectContent>
