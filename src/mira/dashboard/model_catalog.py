@@ -47,7 +47,8 @@ async def _fetch_openai_style(config: LLMConfig, tools_only: bool) -> list[dict]
     headers = {}
     try:
         key = _get_api_key(config)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Could not retrieve API key for model catalog fetch: %s", exc)
         key = ""
     if key:
         headers["Authorization"] = f"Bearer {key}"
