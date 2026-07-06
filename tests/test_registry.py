@@ -1,4 +1,4 @@
-"""Tests for the model registry including MiniMax-2.7."""
+"""Tests for the model registry contents (2026-07 refresh)."""
 
 from __future__ import annotations
 
@@ -7,77 +7,27 @@ import pytest
 from mira.llm import registry
 
 
-class TestMiniMaxInRegistry:
-    """MiniMax-M2.7 must be registered and usable for both indexing and review."""
-
-    def test_minimax_in_all_models(self):
-        assert "minimax/MiniMax-M2.7" in registry.all_models()
-
-    def test_minimax_entry_structure(self):
-        info = registry.get("minimax/MiniMax-M2.7")
-        assert info["label"] == "MiniMax M2.7"
-        assert info["provider"] == "minimax"
-        assert info["max_input_tokens"] == 1000000
-        assert info["max_output_tokens"] == 131072
-        assert info["supports_json_mode"] is True
-
-    def test_minimax_supports_indexing(self):
-        assert registry.is_supported("minimax/MiniMax-M2.7", purpose="indexing")
-
-    def test_minimax_supports_review(self):
-        assert registry.is_supported("minimax/MiniMax-M2.7", purpose="review")
-
-    def test_minimax_in_indexing_models_list(self):
-        indexing = registry.models_for_purpose("indexing")
-        values = [m["value"] for m in indexing]
-        assert "minimax/MiniMax-M2.7" in values
-
-    def test_minimax_in_review_models_list(self):
-        review = registry.models_for_purpose("review")
-        values = [m["value"] for m in review]
-        assert "minimax/MiniMax-M2.7" in values
-
-    def test_minimax_pricing(self):
-        inp, out = registry.pricing("minimax/MiniMax-M2.7")
-        assert inp == 0.30
-        assert out == 2.50
-
-    def test_minimax_max_output_tokens(self):
-        assert registry.max_output_tokens("minimax/MiniMax-M2.7") == 131072
-
-
-class TestRegistryRegression:
-    """Existing models must not be affected by the MiniMax addition."""
-
-    def test_existing_models_still_present(self):
-        assert "anthropic/claude-sonnet-4-6" in registry.all_models()
-        assert "google/gemini-2.5-flash" in registry.all_models()
-
-    def test_existing_indexing_models_still_work(self):
-        indexing = registry.models_for_purpose("indexing")
-        values = [m["value"] for m in indexing]
-        assert "google/gemini-2.5-flash" in values
-
-    def test_existing_review_models_still_work(self):
-        review = registry.models_for_purpose("review")
-        values = [m["value"] for m in review]
-        assert "anthropic/claude-sonnet-4-6" in values
-
-
 class TestCurrentGenerationModels:
-    """GPT-5.x / Gemini 3.x additions (issue #125) — ids and pricing verified
-    against the live OpenRouter catalog."""
+    """Current-generation entries — ids and pricing verified against the live
+    OpenRouter catalog."""
 
     @pytest.mark.parametrize(
         ("model_id", "pricing", "purposes"),
         [
-            ("openai/gpt-4.1-mini", (0.40, 1.60), ["indexing"]),
+            ("anthropic/claude-sonnet-5", (2.00, 10.00), ["review"]),
+            ("anthropic/claude-opus-4-8", (5.00, 25.00), ["review"]),
+            ("anthropic/claude-fable-5", (10.00, 50.00), ["review"]),
             ("openai/gpt-5-nano", (0.05, 0.40), ["indexing"]),
             ("openai/gpt-5-mini", (0.25, 2.00), ["indexing", "review"]),
             ("openai/gpt-5.1-codex-mini", (0.25, 2.00), ["indexing", "review"]),
             ("openai/gpt-5.1-codex", (1.25, 10.00), ["review"]),
+            ("openai/gpt-5.2", (1.75, 14.00), ["review"]),
             ("google/gemini-3-flash-preview", (0.50, 3.00), ["indexing", "review"]),
             ("google/gemini-3.1-flash-lite", (0.25, 1.50), ["indexing"]),
+            ("google/gemini-3.1-pro-preview", (2.00, 12.00), ["review"]),
+            ("deepseek/deepseek-v4-flash", (0.09, 0.18), ["indexing"]),
+            ("deepseek/deepseek-v4-pro", (0.43, 0.87), ["review"]),
+            ("minimax/minimax-m3", (0.30, 1.20), ["indexing", "review"]),
         ],
     )
     def test_registered_with_pricing_and_purposes(self, model_id, pricing, purposes):
@@ -87,6 +37,8 @@ class TestCurrentGenerationModels:
             assert model_id in [m["value"] for m in registry.models_for_purpose(purpose)]
 
     def test_recommended_defaults_unchanged(self):
+        # Recommended stays on the eval-validated pair until benchmarks say
+        # otherwise (v10 baseline was measured on Sonnet 4.6 / Haiku 4.5).
         indexing = registry.models_for_purpose("indexing")
         review = registry.models_for_purpose("review")
         assert [m["value"] for m in indexing if m["recommended"]] == [
@@ -97,3 +49,15 @@ class TestCurrentGenerationModels:
             "anthropic/claude-sonnet-4-6",
             "us.anthropic.claude-sonnet-4-6-v1:0",
         ]
+
+    def test_superseded_models_removed(self):
+        for model_id in (
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            "openai/gpt-4.1-mini",
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-pro",
+            "minimax/MiniMax-M2.7",
+            "anthropic/claude-opus-4-6",
+        ):
+            assert registry.get(model_id) is None
