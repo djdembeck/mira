@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { ModelSelect } from "@/components/model-select"
 import {
   Select,
   SelectContent,
@@ -39,6 +40,9 @@ export function SettingsPage() {
   const [thinkingMode, setThinkingMode] = useState("off")
   const [thinkingOptions, setThinkingOptions] = useState<
     { value: string; label: string; recommended?: boolean }[]
+  >([])
+  const [availableModels, setAvailableModels] = useState<
+    { value: string; label: string }[]
   >([])
   const [savingModels, setSavingModels] = useState(false)
   const [modelsSaved, setModelsSaved] = useState(false)
@@ -72,6 +76,7 @@ export function SettingsPage() {
       setReviewOptions(m.review_options)
       setThinkingMode(m.review_thinking_mode)
       setThinkingOptions(m.thinking_options)
+      setAvailableModels(m.available_models)
     })
     api.getGlobalSettings().then((s) => {
       setEffective(
@@ -322,23 +327,12 @@ export function SettingsPage() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Indexing Model</label>
-              <Select value={indexingModel} onValueChange={setIndexingModel}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {indexingOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                      {opt.recommended && (
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          Recommended
-                        </span>
-                      )}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ModelSelect
+                value={indexingModel}
+                onChange={setIndexingModel}
+                options={indexingOptions}
+                available={availableModels}
+              />
               <p className="text-xs text-muted-foreground">
                 Used to summarize files when building the code index. A cheaper
                 model is recommended since it runs over every file.
@@ -346,23 +340,12 @@ export function SettingsPage() {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Review Model</label>
-              <Select value={reviewModel} onValueChange={setReviewModel}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {reviewOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                      {opt.recommended && (
-                        <span className="ml-2 text-xs text-muted-foreground">
-                          Recommended
-                        </span>
-                      )}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ModelSelect
+                value={reviewModel}
+                onChange={setReviewModel}
+                options={reviewOptions}
+                available={availableModels}
+              />
               <p className="text-xs text-muted-foreground">
                 Used to analyze PRs and post review comments. A more powerful
                 model gives better review quality.
@@ -371,10 +354,10 @@ export function SettingsPage() {
             <div className="space-y-2">
               <label className="text-sm font-medium">Review Thinking Mode</label>
               <Select value={thinkingMode} onValueChange={setThinkingMode}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   {thinkingOptions.map((opt) => (
                     <SelectItem key={opt.value} value={opt.value}>
                       {opt.label}

@@ -377,6 +377,11 @@ class ModelsResponse(BaseModel):
     # Extended-thinking effort for reviews ("off"/"low"/"medium"/"high").
     review_thinking_mode: str
     thinking_options: list[ModelOption]
+    # Configured endpoint kind: "openrouter" | "bedrock" | "generic".
+    provider: str
+    # Full live model list from the endpoint (OpenRouter only; empty otherwise).
+    # The UI offers these below the curated options.
+    available_models: list[ModelOption] = []
 
 
 class ModelsUpdate(BaseModel):
@@ -392,9 +397,12 @@ def get_models() -> ModelsResponse:
         INDEXING_MODELS,
         REVIEW_MODELS,
         THINKING_MODES,
+        detect_provider,
         get_indexing_model,
         get_review_model,
         get_review_thinking_mode,
+        openrouter_models,
+        options_for_provider,
     )
 
     config = load_config()
@@ -402,13 +410,31 @@ def get_models() -> ModelsResponse:
     review = get_review_model(config.llm, _app_db.get_setting("review_model"))
     thinking = get_review_thinking_mode(config.llm, _app_db.get_setting("review_thinking_mode"))
 
+    provider = detect_provider(config.llm)
+    live = openrouter_models() if provider == "openrouter" else None
+    live_ids = frozenset(live) if live else None
+
+    # OpenRouter names are "Vendor: Model" — drop the vendor so they read like
+    # the registry labels ("Claude Sonnet 5", not "Anthropic: Claude Sonnet 5").
+    def short(name: str) -> str:
+        return name.split(": ", 1)[1] if ": " in name else name
+
     return ModelsResponse(
         indexing_model=indexing,
         review_model=review,
-        indexing_options=[ModelOption(**m) for m in INDEXING_MODELS],
-        review_options=[ModelOption(**m) for m in REVIEW_MODELS],
+        indexing_options=[
+            ModelOption(**m) for m in options_for_provider(INDEXING_MODELS, provider, live_ids)
+        ],
+        review_options=[
+            ModelOption(**m) for m in options_for_provider(REVIEW_MODELS, provider, live_ids)
+        ],
         review_thinking_mode=thinking or "off",
         thinking_options=[ModelOption(**m) for m in THINKING_MODES],
+        provider=provider,
+        available_models=[
+            ModelOption(value=i, label=short(n))
+            for i, n in sorted((live or {}).items(), key=lambda kv: short(kv[1]).lower())
+        ],
     )
 
 
@@ -510,18 +536,33 @@ def set_global_settings(body: GlobalSettingsUpdate, request: Request) -> dict:
 
 @router.put("/api/settings/models")
 def set_models(body: ModelsUpdate) -> dict:
-    from mira.dashboard.models_config import THINKING_MODE_VALUES
+    from mira.config import load_config
+    from mira.dashboard.models_config import (
+        THINKING_MODE_VALUES,
+        detect_provider,
+        openrouter_model_ids,
+        openrouter_serves,
+    )
     from mira.llm.registry import is_supported
 
     # Reject unsupported or wrong-purpose models. Without this, an admin can
     # silently configure a model that's broken (no JSON mode, missing from
-    # the registry, miscategorized for the role).
-    if not is_supported(body.indexing_model, purpose="indexing"):
+    # the registry, miscategorized for the role). Off-registry ids are still
+    # accepted when the live OpenRouter list serves them — the registry lags
+    # new releases, and purpose can't be known for models it doesn't list.
+    live_ids = None
+    if detect_provider(load_config().llm) == "openrouter":
+        live_ids = openrouter_model_ids()
+
+    def _selectable(model_id: str, purpose: str) -> bool:
+        return is_supported(model_id, purpose=purpose) or openrouter_serves(model_id, live_ids)
+
+    if not _selectable(body.indexing_model, "indexing"):
         raise HTTPException(
             status_code=400,
             detail=f"{body.indexing_model!r} is not a supported indexing model.",
         )
-    if not is_supported(body.review_model, purpose="review"):
+    if not _selectable(body.review_model, "review"):
         raise HTTPException(
             status_code=400,
             detail=f"{body.review_model!r} is not a supported review model.",

@@ -10,21 +10,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { ModelSelect, type ModelOption } from "@/components/model-select"
 import { api } from "@/lib/api"
 import { useDocumentTitle } from "@/lib/hooks"
-
-type ModelOption = {
-  value: string
-  label: string
-  recommended?: boolean
-}
 
 export function SetupPage() {
   useDocumentTitle("Setup")
@@ -35,6 +23,7 @@ export function SetupPage() {
   const [reviewModel, setReviewModel] = useState("")
   const [indexingOptions, setIndexingOptions] = useState<ModelOption[]>([])
   const [reviewOptions, setReviewOptions] = useState<ModelOption[]>([])
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([])
 
   useEffect(() => {
     api.getModels().then((data) => {
@@ -42,6 +31,7 @@ export function SetupPage() {
       setReviewModel(data.review_model)
       setIndexingOptions(data.indexing_options)
       setReviewOptions(data.review_options)
+      setAvailableModels(data.available_models)
       setLoading(false)
     })
   }, [])
@@ -82,23 +72,12 @@ export function SetupPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Select value={indexingModel} onValueChange={setIndexingModel}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {indexingOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                  {opt.recommended && (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      Recommended
-                    </span>
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ModelSelect
+            value={indexingModel}
+            onChange={setIndexingModel}
+            options={indexingOptions}
+            available={availableModels}
+          />
         </CardContent>
       </Card>
 
@@ -111,23 +90,12 @@ export function SetupPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Select value={reviewModel} onValueChange={setReviewModel}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {reviewOptions.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                  {opt.recommended && (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      Recommended
-                    </span>
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ModelSelect
+            value={reviewModel}
+            onChange={setReviewModel}
+            options={reviewOptions}
+            available={availableModels}
+          />
         </CardContent>
       </Card>
 

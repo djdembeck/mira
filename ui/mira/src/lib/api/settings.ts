@@ -14,6 +14,8 @@ export const settingsApi = {
       review_options: { value: string; label: string; recommended?: boolean }[]
       review_thinking_mode: string
       thinking_options: { value: string; label: string; recommended?: boolean }[]
+      provider: string
+      available_models: { value: string; label: string }[]
     }>("/api/settings/models"),
 
   saveModels: (

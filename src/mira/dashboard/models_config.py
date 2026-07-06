@@ -7,8 +7,15 @@ model there; this file picks it up automatically.
 
 from __future__ import annotations
 
+import logging
+import time
+
+import httpx
+
 from mira.config import LLMConfig
 from mira.llm import registry
+
+logger = logging.getLogger(__name__)
 
 # ── Backwards-compatible accessors ──
 # Older imports of MODEL_PRICING / INDEXING_MODELS / REVIEW_MODELS still
@@ -34,6 +41,84 @@ THINKING_MODES: list[dict[str, str]] = [
     {"value": "max", "label": "Max"},
 ]
 THINKING_MODE_VALUES = {m["value"] for m in THINKING_MODES}
+
+# ── Provider-aware model availability ──
+# The registry mixes OpenRouter-style ids (vendor/model) and Bedrock ids
+# (us.anthropic...-v1:0). Filter the dropdown to what the configured endpoint
+# can actually serve, and on OpenRouter validate against its live model list.
+
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+_OPENROUTER_CACHE_TTL = 3600.0
+_openrouter_cache: tuple[float, dict[str, str]] | None = None
+
+
+def detect_provider(llm: LLMConfig) -> str:
+    """Classify the configured endpoint: 'bedrock', 'openrouter', or 'generic'
+    (any other OpenAI-compatible endpoint — vLLM, Ollama, LiteLLM, ...)."""
+    if llm.provider == "bedrock":
+        return "bedrock"
+    if "openrouter.ai" in llm.base_url:
+        return "openrouter"
+    return "generic"
+
+
+def openrouter_models() -> dict[str, str] | None:
+    """Live OpenRouter models as ``{id: display_name}``, cached for an hour
+    per process.
+
+    Returns None (or the stale cache, if any) when the fetch fails so callers
+    fall back to the static registry instead of an empty list.
+    """
+    global _openrouter_cache
+    now = time.time()
+    if _openrouter_cache and now - _openrouter_cache[0] < _OPENROUTER_CACHE_TTL:
+        return _openrouter_cache[1]
+    try:
+        resp = httpx.get(OPENROUTER_MODELS_URL, timeout=5.0)
+        resp.raise_for_status()
+        models = {m["id"]: m.get("name") or m["id"] for m in resp.json()["data"]}
+    except Exception as exc:
+        logger.warning("OpenRouter model list fetch failed (%s); using registry as-is", exc)
+        return _openrouter_cache[1] if _openrouter_cache else None
+    _openrouter_cache = (now, models)
+    return models
+
+
+def openrouter_model_ids() -> frozenset[str] | None:
+    models = openrouter_models()
+    return frozenset(models) if models is not None else None
+
+
+def openrouter_serves(model_id: str, live_ids: frozenset[str] | None) -> bool:
+    """True if the live list has the id. OpenRouter lists lowercase dot
+    versions (claude-sonnet-4.6, minimax-m2.7) but accepts dash and mixed-case
+    aliases (claude-sonnet-4-6, MiniMax-M2.7) — the registry uses those — so
+    compare case-insensitively with dots normalized to dashes."""
+    if live_ids is None:
+        return False
+
+    def norm(i: str) -> str:
+        return i.replace(".", "-").lower()
+
+    return norm(model_id) in {norm(i) for i in live_ids}
+
+
+def options_for_provider(
+    options: list[dict], provider: str, live_ids: frozenset[str] | None = None
+) -> list[dict]:
+    """Drop dropdown options the configured endpoint can't serve.
+
+    Bedrock ids have no '/'; OpenRouter/OpenAI-compatible ids do. If a live
+    OpenRouter list is available, also drop ids it no longer serves. Never
+    returns an empty list — a wrong filter shouldn't blank the dropdown.
+    """
+    if provider == "bedrock":
+        out = [o for o in options if "/" not in o["value"]]
+    else:
+        out = [o for o in options if "/" in o["value"]]
+        if provider == "openrouter" and live_ids:
+            out = [o for o in out if openrouter_serves(o["value"], live_ids)]
+    return out or options
 
 
 def estimate_indexing_cost(file_count: int, model: str) -> dict:
