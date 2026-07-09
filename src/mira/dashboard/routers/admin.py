@@ -91,11 +91,10 @@ async def register_gitlab_repo(body: GitLabRepoRegister) -> dict:
 
 
 @router.get("/api/settings/models", response_model=ModelsResponse)
-def get_models() -> ModelsResponse:
+async def get_models() -> ModelsResponse:
     from mira.config import load_config
+    from mira.dashboard.model_catalog import active_backend, build_options, fetch_catalog
     from mira.dashboard.models_config import (
-        INDEXING_MODELS,
-        REVIEW_MODELS,
         THINKING_MODES,
         get_indexing_model,
         get_review_model,
@@ -103,17 +102,27 @@ def get_models() -> ModelsResponse:
     )
 
     config = load_config()
-    indexing = get_indexing_model(config.llm, _api._app_db.get_setting("indexing_model"))
-    review = get_review_model(config.llm, _api._app_db.get_setting("review_model"))
+    db_indexing = _api._app_db.get_setting("indexing_model")
+    db_review = _api._app_db.get_setting("review_model")
+    indexing = get_indexing_model(config.llm, db_indexing)
+    review = get_review_model(config.llm, db_review)
     thinking = get_review_thinking_mode(
         config.llm, _api._app_db.get_setting("review_thinking_mode")
     )
 
+    backend = active_backend(config.llm)
+    catalog = await fetch_catalog(config.llm)
+
     return ModelsResponse(
         indexing_model=indexing,
         review_model=review,
-        indexing_options=[ModelOption(**m) for m in INDEXING_MODELS],
-        review_options=[ModelOption(**m) for m in REVIEW_MODELS],
+        backend=backend,
+        indexing_source="dashboard" if db_indexing else "config",
+        review_source="dashboard" if db_review else "config",
+        config_indexing_model=get_indexing_model(config.llm),
+        config_review_model=get_review_model(config.llm),
+        indexing_options=[ModelOption(**m) for m in build_options(backend, catalog, "indexing")],
+        review_options=[ModelOption(**m) for m in build_options(backend, catalog, "review")],
         review_thinking_mode=thinking or "off",
         thinking_options=[ModelOption(**m) for m in THINKING_MODES],
     )
@@ -182,28 +191,18 @@ def set_global_settings(body: GlobalSettingsUpdate, request: Request) -> dict:
 @router.put("/api/settings/models")
 def set_models(body: ModelsUpdate) -> dict:
     from mira.dashboard.models_config import THINKING_MODE_VALUES
-    from mira.llm.registry import is_supported
 
-    # Reject unsupported or wrong-purpose models. Without this, an admin can
-    # silently configure a model that's broken (no JSON mode, missing from
-    # the registry, miscategorized for the role).
-    if not is_supported(body.indexing_model, purpose="indexing"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{body.indexing_model!r} is not a supported indexing model.",
-        )
-    if not is_supported(body.review_model, purpose="review"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{body.review_model!r} is not a supported review model.",
-        )
     if body.review_thinking_mode not in THINKING_MODE_VALUES:
         raise HTTPException(
             status_code=400,
             detail=f"{body.review_thinking_mode!r} is not a valid thinking mode.",
         )
-    _api._app_db.set_setting("indexing_model", body.indexing_model)
-    _api._app_db.set_setting("review_model", body.review_model)
+    # "" clears the override so mira.yaml is authoritative again. Any other id
+    # is stored as-is — the dashboard accepts the same free-form model ids as
+    # mira.yaml (the dropdown still guides toward registry models), and the
+    # registry falls back gracefully for pricing/limits of unknown ids.
+    _api._app_db.set_setting("indexing_model", body.indexing_model.strip())
+    _api._app_db.set_setting("review_model", body.review_model.strip())
     # Clear "off" to "" rather than persisting the literal — "off" is the
     # default, and a stored value would shadow a mira.yaml
     # `review_reasoning_effort` override. "" (not None — the column is NOT NULL)

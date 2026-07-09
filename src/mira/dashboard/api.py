@@ -47,7 +47,7 @@ def register_dashboard(app: FastAPI) -> None:
 
 # Standalone app — initialized at module load, but routes are registered at
 # the bottom of this file, *after* all @router decorators have run.
-app = FastAPI(title="Mira Dashboard API", version="0.5.0")
+app = FastAPI(title="Mira Dashboard API", version="0.6.0")
 
 _INDEX_DIR = os.environ.get("MIRA_INDEX_DIR", "/data/indexes")
 
@@ -193,6 +193,16 @@ class ReviewEventModel(BaseModel):
     created_at: float
 
 
+class ActivityEventModel(ReviewEventModel):
+    owner: str
+    repo: str
+
+
+class ActivityResponse(BaseModel):
+    events: list[ActivityEventModel]
+    repos: list[str]
+
+
 class ReviewStatsModel(BaseModel):
     total_reviews: int
     total_comments: int
@@ -289,6 +299,12 @@ class ModelOption(BaseModel):
 class ModelsResponse(BaseModel):
     indexing_model: str
     review_model: str
+    backend: str  # "openrouter" | "bedrock" | "openai-compatible"
+    indexing_source: str  # "dashboard" (DB override) | "config" (mira.yaml)
+    review_source: str
+    # What each model resolves to with no override — the "inherit" target.
+    config_indexing_model: str
+    config_review_model: str
     indexing_options: list[ModelOption]
     review_options: list[ModelOption]
     # Extended-thinking effort for reviews ("off"/"low"/"medium"/"high").
@@ -557,17 +573,31 @@ class RuleCreate(BaseModel):
 
 
 class LearnedRuleModel(BaseModel):
+    id: int = 0
     rule_text: str
-    source_signal: str  # "reject_pattern" | "accept_pattern" | "human_pattern"
+    source_signal: str  # "reject_pattern" | "accept_pattern" | "human_pattern" | "manual"
     category: str
     path_pattern: str = ""
     sample_count: int = 0
+    active: bool = True
+    status: str = "approved"  # 'pending' | 'approved' | 'rejected'
+    created_by: str = ""  # admin username for manual rules; '' for synthesized
     updated_at: float = 0.0
 
 
 class OrgLearnedRuleModel(LearnedRuleModel):
     owner: str
     repo: str
+
+
+class LearnedRuleInput(BaseModel):
+    rule_text: str
+    category: str = "other"
+    path_pattern: str = ""
+
+
+class LearnedRuleActiveInput(BaseModel):
+    active: bool
 
 
 # ── Global rules endpoints ──

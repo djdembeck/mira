@@ -501,7 +501,10 @@ async def _count_files_for_repos(
             continue
         owner, repo = full_name.split("/", 1)
         try:
-            tree_paths = await fetcher.repo_tree(owner, repo, "main")
+            # Resolve the repo's actual default branch — hardcoding "main"
+            # 404s on repos whose default is "master" (or anything else).
+            branch = await fetcher.default_branch(owner, repo)
+            tree_paths = await fetcher.repo_tree(owner, repo, branch)
             indexable = [p for p in tree_paths if _should_index(p, exclude_patterns)]
             app_db.set_repo_file_count(owner, repo, len(indexable))
             logger.info("Counted %d indexable files in %s", len(indexable), full_name)

@@ -1,19 +1,17 @@
-"""Default model resolution for the setup dropdowns."""
+"""Default model resolution for the dashboard model pickers."""
 
 from __future__ import annotations
 
 from mira.config import LLMConfig
 from mira.dashboard.models_config import get_indexing_model, get_review_model
-from mira.llm import registry
 
 
-def test_indexing_default_is_a_valid_indexing_model():
-    # Default config.model is review-tier Sonnet, which is NOT an indexing
-    # option; the resolver must fall back to a real indexing model so the
-    # dropdown has something to pre-select.
-    resolved = get_indexing_model(LLMConfig())
-    assert registry.is_supported(resolved, purpose="indexing")
-    assert resolved == registry.default_for_purpose("indexing")
+def test_indexing_falls_back_to_config_model():
+    # No override anywhere → the configured model is honored as-is, even if
+    # it's review-tier; the combobox accepts free-form ids so nothing needs
+    # to match a registry entry.
+    cfg = LLMConfig()
+    assert get_indexing_model(cfg) == cfg.model
 
 
 def test_review_default_unchanged_when_model_is_review_capable():
