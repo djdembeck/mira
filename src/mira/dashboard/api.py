@@ -61,14 +61,9 @@ def _open_store(owner: str, repo: str) -> Generator[IndexStore, None, None]:
     """Open an IndexStore via the factory (Postgres or SQLite).
 
     The dashboard routes are keyed by (owner, repo) only, so resolve the
-    platform from the registry (github first, then gitlab, then forgejo) to open the right
-    per-platform store.
+    platform from the registry with a single cross-platform lookup.
     """
-    repo_record = (
-        _app_db.get_repo(owner, repo, platform="github")
-        or _app_db.get_repo(owner, repo, platform="gitlab")
-        or _app_db.get_repo(owner, repo, platform="forgejo")
-    )
+    repo_record = _app_db.get_repo_any_platform(owner, repo)
     if repo_record is None:
         raise HTTPException(status_code=404, detail=f"Repo {owner}/{repo} not found")
 

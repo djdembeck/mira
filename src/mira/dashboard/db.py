@@ -932,6 +932,67 @@ class AppDatabase:
                     platform=row[13],
                 )
             return None
+    def get_repo_any_platform(self, owner: str, repo: str) -> RepoRecord | None:
+        """Look up a repo by (owner, repo) regardless of platform.
+
+        Single query replacing the former triple ``get_repo`` fallback
+        (github → gitlab → forgejo). That pattern made 3 sequential SQLite
+        calls on a threadpool worker, and the widened window collided with
+        event-loop-thread access — producing ``InterfaceError`` on Forgejo
+        repos (which always miss the github lookup and hit all three).
+        """
+        if self._backend == "sqlite":
+            assert self._sqlite_conn is not None
+            row = self._sqlite_conn.execute(
+                "SELECT owner, repo, status, index_mode, files_indexed, file_count_estimate, "
+                "error, installation_id, created_at, updated_at, last_indexed_at, conventions, private, "
+                "platform FROM repos WHERE owner=? AND repo=? LIMIT 1",
+                (owner, repo),
+            ).fetchone()
+            if row:
+                return RepoRecord(
+                    owner=row[0],
+                    repo=row[1],
+                    status=row[2],
+                    index_mode=row[3],
+                    files_indexed=row[4],
+                    file_count_estimate=row[5],
+                    error=row[6],
+                    installation_id=row[7],
+                    created_at=row[8],
+                    updated_at=row[9],
+                    last_indexed_at=row[10] or 0.0,
+                    conventions=row[11] or "",
+                    private=(None if row[12] is None else bool(row[12])),
+                    platform=row[13],
+                )
+            return None
+        with self._pg_cursor() as cur:
+            cur.execute(
+                "SELECT owner, repo, status, index_mode, files_indexed, file_count_estimate, "
+                "error, installation_id, created_at, updated_at, last_indexed_at, conventions, private, "
+                "platform FROM repos WHERE owner=%s AND repo=%s LIMIT 1",
+                (owner, repo),
+            )
+            row = cur.fetchone()
+            if row:
+                return RepoRecord(
+                    owner=row[0],
+                    repo=row[1],
+                    status=row[2],
+                    index_mode=row[3],
+                    files_indexed=row[4],
+                    file_count_estimate=row[5],
+                    error=row[6],
+                    installation_id=row[7],
+                    created_at=row[8].timestamp() if row[8] else 0.0,
+                    updated_at=row[9].timestamp() if row[9] else 0.0,
+                    last_indexed_at=row[10].timestamp() if row[10] else 0.0,
+                    conventions=row[11] or "",
+                    private=(None if row[12] is None else bool(row[12])),
+                    platform=row[13],
+                )
+            return None
 
     def set_repo_conventions(
         self, owner: str, repo: str, conventions: str, platform: str = "github"
