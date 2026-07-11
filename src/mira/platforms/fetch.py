@@ -290,7 +290,7 @@ class ForgejoRepoFetcher:
                     raise EmptyRepoError(owner, repo)
                 resp.raise_for_status()
                 data = resp.json()
-                for item in data.get("tree", []):
+                for item in data.get("tree") or []:
                     if item.get("type") == "blob":
                         paths.append(item["path"])
                 if not data.get("truncated", False):
