@@ -254,8 +254,15 @@ class ForgejoProvider(BaseProvider):
         if not result.comments:
             return
 
+        summary_text = ""
+        if result.summary:
+            summary_text = f"**Mira Review Summary**\n\n{result.summary}"
+        if result.key_issues:
+            summary_text += format_key_issues(result.key_issues)
+
         review_body = {
             "event": "COMMENT",
+            "body": summary_text or None,
             "commit_id": pr_info.head_sha,
             "comments": [
                 {
@@ -272,6 +279,11 @@ class ForgejoProvider(BaseProvider):
         except ProviderError as exc:
             if getattr(exc, "status_code", None) == 422:
                 logger.warning("Inline review failed (%s); posting as individual comments", exc)
+                if summary_text:
+                    try:
+                        await self.post_comment(pr_info, summary_text)
+                    except ProviderError:
+                        logger.warning("Failed to post PR summary comment (fallback)")
                 for comment in result.comments:
                     body = format_comment_body(comment, bot_name=bot_name)
                     note = f"**`{comment.path}:{comment.line}`**\n\n{body}"
@@ -285,17 +297,6 @@ class ForgejoProvider(BaseProvider):
                         )
             else:
                 raise
-
-        review_body_text = ""
-        if result.summary:
-            review_body_text = f"**Mira Review Summary**\n\n{result.summary}"
-        if result.key_issues:
-            review_body_text += format_key_issues(result.key_issues)
-        if review_body_text:
-            try:
-                await self.post_comment(pr_info, review_body_text)
-            except ProviderError as exc:
-                logger.warning("Failed to post PR summary comment: %s", exc)
 
     async def post_comment(self, pr_info: PRInfo, body: str) -> None:
         await self._request(
