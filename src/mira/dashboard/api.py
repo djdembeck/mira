@@ -56,6 +56,16 @@ def _get_index_dir() -> str:
     return os.environ.get("MIRA_INDEX_DIR", _INDEX_DIR)
 
 
+# Cross-platform preference order used when the same owner/repo exists on
+# more than one platform: github → gitlab → forgejo.
+_PLATFORM_ORDER = {"github": 0, "gitlab": 1, "forgejo": 2}
+
+
+def _pick_platform_record(records: list) -> object:
+    """Return the highest-priority record from a cross-platform list."""
+    return min(records, key=lambda r: _PLATFORM_ORDER.get(r.platform, 99))
+
+
 @contextmanager
 def _open_store(owner: str, repo: str) -> Generator[IndexStore, None, None]:
     """Open an IndexStore via the factory (Postgres or SQLite).
@@ -66,10 +76,7 @@ def _open_store(owner: str, repo: str) -> Generator[IndexStore, None, None]:
     repo_records = _app_db.get_repo_any_platform(owner, repo)
     if not repo_records:
         raise HTTPException(status_code=404, detail=f"Repo {owner}/{repo} not found")
-    # The same owner/repo can exist on more than one platform; prefer
-    # github → gitlab → forgejo (the historical fallback order).
-    _order = {"github": 0, "gitlab": 1, "forgejo": 2}
-    repo_record = min(repo_records, key=lambda r: _order.get(r.platform, 99))
+    repo_record = _pick_platform_record(repo_records)
 
     store = IndexStore.open(owner, repo, platform=repo_record.platform)
     try:

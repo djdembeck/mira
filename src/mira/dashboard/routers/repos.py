@@ -26,6 +26,7 @@ from mira.dashboard.api import (
     SymbolModel,
     _open_relationships,
     _open_store,
+    _pick_platform_record,
     logger,
     router,
 )
@@ -451,12 +452,7 @@ async def trigger_index(owner: str, repo: str, full: bool = False) -> dict:
     records = _api._app_db.get_repo_any_platform(owner, repo)
     # Same owner/repo can exist on multiple platforms; prefer
     # github → gitlab → forgejo (the historical fallback order).
-    _order = {"github": 0, "gitlab": 1, "forgejo": 2}
-    platform = (
-        min(records, key=lambda r: _order.get(r.platform, 99)).platform
-        if records
-        else "github"
-    )
+    platform = _pick_platform_record(records).platform if records else "github"
 
     from mira.platforms.fetch import EmptyRepoError, make_fetcher
 
