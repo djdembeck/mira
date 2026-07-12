@@ -15,6 +15,7 @@ import asyncio
 import base64
 import logging
 import re
+from collections.abc import AsyncGenerator
 from typing import Any
 from urllib.parse import quote
 
@@ -113,8 +114,7 @@ class ForgejoProvider(BaseProvider):
         owner, repo, number = parse_pr_url(pr_url)
         try:
             resp = await self._request(
-                "GET",
-                f"{self._api}/repos/{owner}/{repo}/pulls/{number}",
+                f"{self._api}/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/pulls/{number}",
             )
             pr = resp.json()
         except ProviderError:
@@ -184,15 +184,30 @@ class ForgejoProvider(BaseProvider):
         return base64.b64decode(data.get("content", "")).decode("utf-8", errors="replace")
 
     async def get_repo_tree(self, pr_info: PRInfo, ref: str) -> list[str]:
-        """Every file path in the repo at a ref, for JIT cross-file context."""
-        url = f"{self._repo(pr_info)}/git/trees/{quote(ref, safe='')}?recursive=true"
+        """Every file path in the repo at a ref, for JIT cross-file context.
+
+        Paginates the Gitea git-trees endpoint, which truncates at 1000
+        entries per page (``truncated=true``).  Without pagination, large
+        repos silently return an incomplete file list.
+        """
+        base = f"{self._repo(pr_info)}/git/trees/{quote(ref, safe='')}?recursive=true"
+        paths: list[str] = []
+        page = 1
         try:
-            resp = await self._request("GET", url)
+            while True:
+                url = f"{base}&page={page}" if page > 1 else base
+                resp = await self._request("GET", url)
+                data = resp.json()
+                for entry in data.get("tree") or []:
+                    if entry.get("type") == "blob":
+                        paths.append(entry["path"])
+                if not data.get("truncated", False):
+                    break
+                page += 1
         except Exception as exc:
             logger.debug("Failed to fetch repo tree: %s", exc)
-            return []
-        tree = resp.json().get("tree", [])
-        return [entry["path"] for entry in tree if entry.get("type") == "blob"]
+            return paths
+        return paths
 
     async def get_file_history(
         self, pr_info: PRInfo, paths: list[str], max_per_file: int = 5
@@ -348,28 +363,38 @@ class ForgejoProvider(BaseProvider):
             return data
         return [data]
 
-    async def get_all_bot_threads(
-        self, pr_info: PRInfo, bot_login: str | None = None
-    ) -> list[BotThreadRecord]:
-        try:
-            reviews = await self._paginate(f"{self._pr(pr_info)}/reviews")
-        except Exception as e:
-            raise ProviderError(f"Failed to fetch PR reviews: {e}") from e
+    async def _iter_review_comments(
+        self, pr_info: PRInfo
+    ) -> AsyncGenerator[tuple[dict[str, Any], dict[str, Any]], None]:
+        """Yield ``(review, comment)`` tuples for every review comment in a PR.
 
-        bot_identities = {n for n in (await self._self_username(), bot_login) if n}
-        records: list[BotThreadRecord] = []
+        Handles pagination over reviews and fetching comments per review,
+        swallowing per-review fetch errors so a single bad review doesn't
+        abort the whole traversal.
+        """
+        reviews = await self._paginate(f"{self._pr(pr_info)}/reviews")
 
         for review in reviews:
-            review_user = (review.get("user") or {}).get("username", "")
-            if bot_identities and review_user not in bot_identities:
-                continue
-
             try:
                 comments = await self._fetch_review_comments(pr_info, review["id"])
             except Exception:
-                comments = []
+                continue
 
             for comment in comments:
+                yield (review, comment)
+
+    async def get_all_bot_threads(
+        self, pr_info: PRInfo, bot_login: str | None = None
+    ) -> list[BotThreadRecord]:
+        bot_identities = {n for n in (await self._self_username(), bot_login) if n}
+        records: list[BotThreadRecord] = []
+
+        try:
+            async for review, comment in self._iter_review_comments(pr_info):
+                review_user = (review.get("user") or {}).get("username", "")
+                if bot_identities and review_user not in bot_identities:
+                    continue
+
                 comment_user = (comment.get("user") or {}).get("username", "")
                 if bot_identities and comment_user not in bot_identities:
                     continue
@@ -385,6 +410,8 @@ class ForgejoProvider(BaseProvider):
                         is_outdated=bool(review.get("stale")),
                     )
                 )
+        except Exception as e:
+            raise ProviderError(f"Failed to fetch PR reviews: {e}") from e
 
         return records
 
@@ -411,44 +438,26 @@ class ForgejoProvider(BaseProvider):
     async def get_thread_id_for_comment(self, comment_node_id: str, pr_info: PRInfo) -> str | None:
         """Look up the review thread for a comment by iterating reviews' comments."""
         try:
-            reviews = await self._paginate(f"{self._pr(pr_info)}/reviews")
-        except Exception:
-            return None
-
-        for review in reviews:
-            try:
-                comments = await self._fetch_review_comments(pr_info, review["id"])
-            except Exception:
-                continue
-
-            for comment in comments:
+            async for review, comment in self._iter_review_comments(pr_info):
                 if str(comment.get("id")) == comment_node_id:
                     return str(review["id"])
+        except Exception:
+            pass
 
         return None
 
     async def get_human_review_comments(
         self, pr_info: PRInfo, bot_login: str
     ) -> list[HumanReviewComment]:
-        try:
-            reviews = await self._paginate(f"{self._pr(pr_info)}/reviews")
-        except Exception as e:
-            raise ProviderError(f"Failed to fetch reviews for human comments: {e}") from e
-
         bot_identities = {n for n in (await self._self_username(), bot_login) if n}
         out: list[HumanReviewComment] = []
 
-        for review in reviews:
-            review_user = (review.get("user") or {}).get("username", "")
-            if review_user in bot_identities:
-                continue
+        try:
+            async for review, comment in self._iter_review_comments(pr_info):
+                review_user = (review.get("user") or {}).get("username", "")
+                if review_user in bot_identities:
+                    continue
 
-            try:
-                comments = await self._fetch_review_comments(pr_info, review["id"])
-            except Exception:
-                continue
-
-            for comment in comments:
                 comment_user = (comment.get("user") or {}).get("username", "")
                 if comment_user in bot_identities:
                     continue
@@ -462,6 +471,8 @@ class ForgejoProvider(BaseProvider):
                         author=comment_user,
                     )
                 )
+        except Exception as e:
+            raise ProviderError(f"Failed to fetch reviews for human comments: {e}") from e
 
         return out
 

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from mira.dashboard import api as _api
 from mira.dashboard.api import (
     _ALLOWED_OVERRIDE_SECTIONS,
+    ForgejoRepoRegister,
     GitLabRepoRegister,
     GlobalSettingsResponse,
     GlobalSettingsUpdate,
@@ -106,10 +107,6 @@ async def register_gitlab_repo(body: GitLabRepoRegister) -> dict:
     at ``/gitlab/webhook`` to get auto-review on new MRs.
     """
     return await _register_and_index_repo("gitlab", "MIRA_GITLAB_TOKEN", body)
-
-
-class ForgejoRepoRegister(BaseModel):
-    project: str  # "owner/repo"
 
 
 @router.post("/api/forgejo/sync")

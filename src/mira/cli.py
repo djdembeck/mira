@@ -286,7 +286,7 @@ def review(
     "--forgejo-webhook-secret",
     envvar="MIRA_FORGEJO_WEBHOOK_SECRET",
     default=None,
-    help="Secret string configured on the Forgejo webhook (X-Forgejo-Token)",
+    help="HMAC-SHA256 secret for verifying Forgejo webhook signatures (X-Forgejo-Signature header)",
 )
 @click.option(
     "--forgejo-base-url",

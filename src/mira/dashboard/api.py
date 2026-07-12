@@ -279,6 +279,10 @@ class GitLabRepoRegister(BaseModel):
     project: str  # "group/project" or "group/subgroup/project"
 
 
+class ForgejoRepoRegister(BaseModel):
+    project: str  # "owner/repo"
+
+
 class CostEstimate(BaseModel):
     estimated_usd: float
     input_tokens: int
