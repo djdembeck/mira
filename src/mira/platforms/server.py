@@ -113,9 +113,8 @@ def create_app(
         yield
         if backfill_task is not None and not backfill_task.done():
             backfill_task.cancel()
-        if forgejo_auth is not None:
-            if not fj_task.done():
-                fj_task.cancel()
+        if forgejo_auth is not None and not fj_task.done():
+            fj_task.cancel()
         if not vuln_task.done():
             vuln_task.cancel()
 
@@ -181,7 +180,8 @@ def create_app(
 
     if forgejo_auth is not None and forgejo_webhook_secret is not None:
         from mira.platforms.forgejo.webhook import (
-            dispatch_forgejo_event, verify_forgejo_signature,
+            dispatch_forgejo_event,
+            verify_forgejo_signature,
         )
 
         @app.post("/forgejo/webhook")

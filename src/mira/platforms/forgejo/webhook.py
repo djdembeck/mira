@@ -9,8 +9,8 @@ Signature verification uses HMAC-SHA256 of the request body in
 
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 import logging
 import re
 from typing import Any
@@ -81,12 +81,12 @@ async def backfill_forgejo_repos(auth: PlatformAuth) -> int:
         n += 1
     logger.info("Forgejo: discovered + registered %d accessible repo(s)", n)
     return n
+
+
 def verify_forgejo_signature(signature: str, body: bytes, secret: str) -> bool:
     """Forgejo signs the request body with HMAC-SHA256 and sends the hex
     digest in ``X-Forgejo-Signature``. The secret is never sent in plaintext."""
-    expected = hmac.new(
-        (secret or "").encode("utf-8"), body, hashlib.sha256
-    ).hexdigest()
+    expected = hmac.new((secret or "").encode("utf-8"), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature or "", expected)
 
 
