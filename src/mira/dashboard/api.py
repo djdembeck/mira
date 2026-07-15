@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Generator
@@ -47,7 +48,7 @@ def register_dashboard(app: FastAPI) -> None:
 
 # Standalone app — initialized at module load, but routes are registered at
 # the bottom of this file, *after* all @router decorators have run.
-app = FastAPI(title="Mira Dashboard API", version="0.6.0")
+app = FastAPI(title="Mira Dashboard API", version="0.7.0")
 
 _INDEX_DIR = os.environ.get("MIRA_INDEX_DIR", "/data/indexes")
 
@@ -639,6 +640,572 @@ def _period_to_since(period: str) -> float | None:
     if period == "month":
         return (now - timedelta(days=30)).timestamp()
     return None
+
+
+# ── Contributors ───────────────────────────────────────────────────
+
+
+class ContributorListItem(BaseModel):
+    id: int
+    provider: str
+    login: str
+    display_name: str = ""
+    avatar_url: str = ""
+    is_bot: bool = False
+    prs_opened: int = 0
+    prs_merged: int = 0
+    commits: int = 0
+    reviews: int = 0
+    additions: int = 0
+    deletions: int = 0
+    last_active: float | None = None
+    repos_touched: int = 0
+
+
+class HeatmapDay(BaseModel):
+    day: str
+    total: int = 0
+    commits: int = 0
+    prs_opened: int = 0
+    prs_merged: int = 0
+    reviews: int = 0
+
+
+class ContributorRepoBreakdown(BaseModel):
+    owner: str
+    repo: str
+    commits: int = 0
+    prs_opened: int = 0
+    prs_merged: int = 0
+    reviews: int = 0
+
+
+class ReviewQuality(BaseModel):
+    """Mira's differentiated signal: how much review attention a person's PRs
+    drew, plus how often Mira's feedback on them was accepted."""
+
+    reviews: int = 0
+    blockers: int = 0
+    warnings: int = 0
+    suggestions: int = 0
+    feedback_accepted: int = 0
+    feedback_rejected: int = 0
+    accept_rate: float = 0.0
+
+
+class ContributorDetailModel(BaseModel):
+    contributor: ContributorListItem
+    heatmap: list[HeatmapDay]
+    repos: list[ContributorRepoBreakdown]
+    quality: ReviewQuality
+
+
+class ContributionWindow(BaseModel):
+    commits: int = 0
+    prs_opened: int = 0
+    prs_merged: int = 0
+    reviews: int = 0
+    additions: int = 0
+    contributors: int = 0
+
+
+class ContributorSummary(BaseModel):
+    """Org-wide totals for the trailing window plus the window before it, so the
+    UI can show up/down deltas."""
+
+    days: int
+    current: ContributionWindow
+    previous: ContributionWindow
+
+
+def _build_app_auth():  # type: ignore[no-untyped-def]
+    """Construct GitHubAppAuth from env, or 400 if the App isn't configured."""
+    app_id = os.environ.get("MIRA_GITHUB_APP_ID", "")
+    private_key = os.environ.get("MIRA_GITHUB_PRIVATE_KEY", "")
+    if not app_id or not private_key:
+        raise HTTPException(status_code=400, detail="GitHub App not configured")
+    from mira.platforms.github.auth import GitHubAppAuth
+
+    return GitHubAppAuth(app_id=app_id, private_key=private_key)
+
+
+@router.get("/api/contributors", response_model=list[ContributorListItem])
+def list_contributors(
+    request: Request, sort: str = "commits", period: str = "", include_bots: bool = False
+) -> list[ContributorListItem]:
+    """Cross-repo contributor leaderboard (admin only). sort: commits|prs|reviews|recent|additions."""
+    _require_admin(request)
+    since = _period_to_since(period) if period else None
+    rows = _app_db.list_contributors(sort=sort, since=since, include_bots=include_bots)
+    return [ContributorListItem(**r) for r in rows]
+
+
+@router.get("/api/contributors/summary", response_model=ContributorSummary)
+def contributors_summary(request: Request, days: int = 7) -> ContributorSummary:
+    """Org-wide totals for the trailing `days` window and the window before it,
+    so the UI can show up/down trends. Admin only."""
+    _require_admin(request)
+    days = max(1, min(days, 365))
+    now = datetime.now(tz=UTC).timestamp()
+    window = days * 86400
+    current = _app_db.aggregate_contributions(now - window, now)
+    previous = _app_db.aggregate_contributions(now - 2 * window, now - window)
+    return ContributorSummary(
+        days=days,
+        current=ContributionWindow(**current),
+        previous=ContributionWindow(**previous),
+    )
+
+
+@router.get("/api/contributors/backfill/status")
+def contributors_backfill_status(request: Request) -> list[dict]:
+    """Per-repo backfill progress blobs (status/prs_done/total/error). Admin only."""
+    _require_admin(request)
+    from mira.platforms.github.contributor_backfill import get_backfill_status
+
+    out: list[dict] = []
+    for rec in _app_db.list_repos():
+        status = get_backfill_status(_app_db, rec.owner, rec.repo)
+        if status:
+            out.append({"owner": rec.owner, "repo": rec.repo, **status})
+    return out
+
+
+@router.post("/api/contributors/refresh")
+async def refresh_contributors(request: Request, include_commits: bool = True) -> dict:
+    """Kick off a background backfill of every repo (admin only)."""
+    _require_admin(request)
+    auth = _build_app_auth()
+    from mira.platforms.github.contributor_backfill import backfill_all_repos
+
+    asyncio.create_task(backfill_all_repos(auth, include_commits=include_commits))
+    return {"status": "refreshing"}
+
+
+@router.post("/api/contributors/{owner}/{repo}/refresh")
+async def refresh_contributors_repo(
+    owner: str, repo: str, request: Request, include_commits: bool = True
+) -> dict:
+    """Kick off a background backfill of one repo (admin only)."""
+    _require_admin(request)
+    rec = _app_db.get_repo(owner, repo)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Repo {owner}/{repo} not found")
+    auth = _build_app_auth()
+    from mira.platforms.github.contributor_backfill import backfill_repo_contributions
+
+    asyncio.create_task(
+        backfill_repo_contributions(
+            owner, repo, auth, installation_id=rec.installation_id, include_commits=include_commits
+        )
+    )
+    return {"status": "refreshing"}
+
+
+@router.get("/api/contributors/{login}", response_model=ContributorDetailModel)
+def get_contributor(login: str, request: Request, period: str = "") -> ContributorDetailModel:
+    """One contributor's aggregated stats, 365-day heatmap, per-repo breakdown,
+    and Mira review-quality signal (the quality fan-out mirrors /api/stats). Admin only."""
+    _require_admin(request)
+    contributor = _app_db.get_contributor_by_login("github", login)
+    if contributor is None:
+        raise HTTPException(status_code=404, detail=f"Contributor {login} not found")
+    since = _period_to_since(period) if period else None
+
+    totals = _app_db.get_contributor_totals(contributor.id, since=since)
+    item = ContributorListItem(
+        id=contributor.id,
+        provider=contributor.provider,
+        login=contributor.external_login,
+        display_name=contributor.display_name,
+        avatar_url=contributor.avatar_url,
+        is_bot=contributor.is_bot,
+        last_active=totals["last_active"],
+        repos_touched=totals["repos_touched"],
+        prs_opened=totals["prs_opened"],
+        prs_merged=totals["prs_merged"],
+        commits=totals["commits"],
+        reviews=totals["reviews"],
+        additions=totals["additions"],
+        deletions=totals["deletions"],
+    )
+
+    # 365-day heatmap window ending today (UTC).
+    today = datetime.now(tz=UTC).date()
+    start_day = (today - timedelta(days=364)).strftime("%Y-%m-%d")
+    end_day = today.strftime("%Y-%m-%d")
+    heatmap = [
+        HeatmapDay(
+            day=d.day,
+            total=d.total,
+            commits=d.commits,
+            prs_opened=d.prs_opened,
+            prs_merged=d.prs_merged,
+            reviews=d.reviews,
+        )
+        for d in _app_db.get_contributor_days(contributor.id, start_day, end_day)
+    ]
+
+    repos = [
+        ContributorRepoBreakdown(**b)
+        for b in _app_db.get_contributor_repo_breakdown(contributor.id, since=since)
+    ]
+
+    # Review-quality lives per-repo in IndexStore; fan out like /api/stats.
+    q = {"reviews": 0, "blockers": 0, "warnings": 0, "suggestions": 0}
+    accepted = rejected = 0
+    for repo_record in _app_db.list_repos():
+        try:
+            store = IndexStore.open(
+                repo_record.owner, repo_record.repo, platform=repo_record.platform
+            )
+            try:
+                rq = store.get_review_quality_by_author(contributor.external_login, since=since)
+                fq = store.get_feedback_quality_by_author(contributor.external_login)
+            finally:
+                store.close()
+            for key in q:
+                q[key] += rq[key]
+            accepted += fq["accepted"]
+            rejected += fq["rejected"]
+        except Exception:
+            logger.warning(
+                "Failed to read contributor quality for %s/%s",
+                repo_record.owner,
+                repo_record.repo,
+                exc_info=True,
+            )
+    total_fb = accepted + rejected
+    quality = ReviewQuality(
+        reviews=q["reviews"],
+        blockers=q["blockers"],
+        warnings=q["warnings"],
+        suggestions=q["suggestions"],
+        feedback_accepted=accepted,
+        feedback_rejected=rejected,
+        accept_rate=round(accepted / total_fb, 3) if total_fb else 0.0,
+    )
+
+    return ContributorDetailModel(contributor=item, heatmap=heatmap, repos=repos, quality=quality)
+
+
+# ── Review insights ────────────────────────────────────────────────
+
+
+class ThroughputWindow(BaseModel):
+    time_to_first_review_secs: float | None = None
+    time_to_first_review_count: int = 0
+    time_to_merge_secs: float | None = None
+    time_to_merge_count: int = 0
+
+
+class HealthComponent(BaseModel):
+    key: str
+    label: str
+    score: float  # 0–1
+    detail: str
+
+
+class ReviewSummary(BaseModel):
+    days: int
+    open_prs: int
+    stale_prs: int
+    awaiting_review: int
+    merged: int = 0
+    approved_merged: int = 0
+    approvals: int = 0  # approvals submitted in the window (org-wide)
+    rubber_stamps: int = 0  # of those, approvals with no substantive review
+    health_score: int | None = None  # 0–100
+    health: list[HealthComponent] = []
+    current: ThroughputWindow
+    previous: ThroughputWindow
+
+
+class ReviewerStat(BaseModel):
+    reviewer: str
+    avatar_url: str = ""
+    pending: int = 0  # PRs currently waiting on this person's review
+    reviews: int = 0  # reviews submitted in the window
+    median_response_secs: float | None = None  # requested → first review
+    approvals: int = 0  # approvals submitted in the window
+    rubber_stamps: int = 0  # approvals with no substantive review
+    rubber_stamp_rate: float = 0.0  # rubber_stamps / approvals × 100
+
+
+class OpenPrReviewer(BaseModel):
+    reviewer: str
+    state: str = ""
+    requested: bool = False
+    responded: bool = False
+
+
+class OpenPr(BaseModel):
+    owner: str
+    repo: str
+    number: int
+    author: str
+    title: str
+    url: str
+    draft: bool
+    created_at: float
+    updated_at: float
+    age_secs: float
+    idle_secs: float
+    reviewed: bool
+    stale: bool
+    status: str  # awaiting_review | commented | changes_requested | approved
+    waiting_on: list[str]
+    reviewers: list[OpenPrReviewer]
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def _now() -> float:
+    return datetime.now(tz=UTC).timestamp()
+
+
+def _fmt_secs(secs: float) -> str:
+    """Compact human duration for health-component detail text."""
+    if secs < 3600:
+        return f"{int(secs // 60)}m"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h"
+    return f"{int(secs // 86400)}d"
+
+
+@router.get("/api/review-insights/summary", response_model=ReviewSummary)
+def review_summary(request: Request, days: int = 7, stale_days: int = 3) -> ReviewSummary:
+    """Throughput medians (this window vs previous) + open/stale/awaiting counts. Admin."""
+    _require_admin(request)
+    days = max(1, min(days, 365))
+    now = _now()
+    window = days * 86400
+
+    rows = _app_db.get_throughput_rows()
+
+    def window_throughput(start: float, end: float) -> ThroughputWindow:
+        ttfr = [
+            r["first_review_at"] - r["created_at"]
+            for r in rows
+            if r["first_review_at"] > 0
+            and start <= r["first_review_at"] < end
+            and r["created_at"] > 0
+            and r["first_review_at"] >= r["created_at"]
+        ]
+        ttm = [
+            r["merged_at"] - r["created_at"]
+            for r in rows
+            if r["merged_at"] > 0
+            and start <= r["merged_at"] < end
+            and r["created_at"] > 0
+            and r["merged_at"] >= r["created_at"]
+        ]
+        return ThroughputWindow(
+            time_to_first_review_secs=_median(ttfr),
+            time_to_first_review_count=len(ttfr),
+            time_to_merge_secs=_median(ttm),
+            time_to_merge_count=len(ttm),
+        )
+
+    open_prs = _app_db.get_open_pull_requests()
+    stale_cutoff = stale_days * 86400
+    active = [p for p in open_prs if not p["draft"]]
+    stale = sum(1 for p in active if now - p["updated_at"] > stale_cutoff)
+    awaiting = sum(1 for p in active if p["first_review_at"] == 0)
+
+    current = window_throughput(now - window, now)
+    previous = window_throughput(now - 2 * window, now - window)
+
+    # ── Health score ── proof that humans review, approve, and merge.
+    merged_rows = _app_db.get_merged_pr_quality(now - window, now)
+    merged_n = len(merged_rows)
+    approved_n = sum(1 for m in merged_rows if m["approved"])
+
+    components: list[HealthComponent] = []
+    weights: list[float] = []
+    # 40% — share of merges that a human approved.
+    if merged_n:
+        rate = approved_n / merged_n
+        components.append(
+            HealthComponent(
+                key="approvals",
+                label="Merges approved by a human",
+                score=rate,
+                detail=f"{approved_n} of {merged_n} merged PRs had an approval",
+            )
+        )
+        weights.append(0.4)
+    # 30% — reviews start promptly (24h target).
+    ttfr = current.time_to_first_review_secs
+    if ttfr:
+        resp = max(0.0, min(1.0, 86400 / ttfr))
+        components.append(
+            HealthComponent(
+                key="responsiveness",
+                label="Reviews start promptly",
+                score=resp,
+                detail=f"median first review in {_fmt_secs(ttfr)} (target 24h)",
+            )
+        )
+        weights.append(0.3)
+    # 30% — open PRs aren't going stale.
+    backlog = 1.0 - (stale / len(active)) if active else 1.0
+    components.append(
+        HealthComponent(
+            key="backlog",
+            label="Open PRs aren't going stale",
+            score=backlog,
+            detail=(f"{stale} of {len(active)} open PRs are stale" if active else "no open PRs"),
+        )
+    )
+    weights.append(0.3)
+
+    total_w = sum(weights)
+    health_score = (
+        round(100 * sum(c.score * w for c, w in zip(components, weights, strict=True)) / total_w)
+        if total_w
+        else None
+    )
+
+    # ── Org-wide rubber-stamps ── approvals (in window) with no substantive review.
+    org_approvals = 0
+    org_rubber_stamps = 0
+    for r in _app_db.get_reviewer_activity_rows():
+        if r["responded_at"] >= now - window and r["review_state"] == "approved":
+            org_approvals += 1
+            if r["bare_approval"]:
+                org_rubber_stamps += 1
+
+    return ReviewSummary(
+        days=days,
+        open_prs=len(active),
+        stale_prs=stale,
+        awaiting_review=awaiting,
+        merged=merged_n,
+        approved_merged=approved_n,
+        approvals=org_approvals,
+        rubber_stamps=org_rubber_stamps,
+        health_score=health_score,
+        health=components,
+        current=current,
+        previous=previous,
+    )
+
+
+@router.get("/api/review-insights/open-prs", response_model=list[OpenPr])
+def review_open_prs(request: Request, stale_days: int = 3) -> list[OpenPr]:
+    """Open PRs as a status board: age, idle time, who they're waiting on,
+    reviewer states, and a stale flag. Sorted oldest-first. Admin."""
+    _require_admin(request)
+    now = _now()
+    stale_cutoff = stale_days * 86400
+
+    by_pr: dict[tuple[str, str, int], list[dict]] = {}
+    for r in _app_db.get_open_pr_reviewers():
+        by_pr.setdefault((r["owner"], r["repo"], r["number"]), []).append(r)
+
+    out: list[OpenPr] = []
+    for p in _app_db.get_open_pull_requests():
+        revs = by_pr.get((p["owner"], p["repo"], p["number"]), [])
+        reviewers = [
+            OpenPrReviewer(
+                reviewer=r["reviewer"],
+                state=r["state"],
+                requested=r["requested_at"] > 0,
+                responded=r["responded_at"] > 0,
+            )
+            for r in revs
+        ]
+        waiting_on = [r.reviewer for r in reviewers if r.requested and not r.responded]
+        responded_states = [r.state for r in reviewers if r.responded]
+        if "changes_requested" in responded_states:
+            status = "changes_requested"
+        elif "approved" in responded_states:
+            status = "approved"
+        elif p["first_review_at"] > 0 or responded_states:
+            status = "commented"
+        else:
+            status = "awaiting_review"
+        idle = now - p["updated_at"]
+        out.append(
+            OpenPr(
+                owner=p["owner"],
+                repo=p["repo"],
+                number=p["number"],
+                author=p["author"],
+                title=p["title"],
+                url=p["url"],
+                draft=p["draft"],
+                created_at=p["created_at"],
+                updated_at=p["updated_at"],
+                age_secs=now - p["created_at"],
+                idle_secs=idle,
+                reviewed=p["first_review_at"] > 0,
+                stale=(not p["draft"]) and idle > stale_cutoff,
+                status=status,
+                waiting_on=waiting_on,
+                reviewers=reviewers,
+            )
+        )
+    out.sort(key=lambda o: o.age_secs, reverse=True)
+    return out
+
+
+@router.get("/api/review-insights/reviewers", response_model=list[ReviewerStat])
+def review_reviewers(request: Request, days: int = 30) -> list[ReviewerStat]:
+    """Per-reviewer responsiveness: current pending queue + median response time
+    + reviews in the window. The bottleneck floats to the top. Admin."""
+    _require_admin(request)
+    since = _now() - max(1, days) * 86400
+
+    pending: dict[str, int] = {}
+    latencies: dict[str, list[float]] = {}
+    reviews: dict[str, int] = {}
+    approvals: dict[str, int] = {}
+    rubber_stamps: dict[str, int] = {}
+    for r in _app_db.get_reviewer_activity_rows():
+        who = r["reviewer"]
+        req, resp = r["requested_at"], r["responded_at"]
+        if req > 0 and resp == 0 and r["pr_state"] == "open":
+            pending[who] = pending.get(who, 0) + 1
+        if resp > 0 and resp >= since:
+            reviews[who] = reviews.get(who, 0) + 1
+            if req > 0 and resp >= req:
+                latencies.setdefault(who, []).append(resp - req)
+            if r["review_state"] == "approved":
+                approvals[who] = approvals.get(who, 0) + 1
+                if r["bare_approval"]:
+                    rubber_stamps[who] = rubber_stamps.get(who, 0) + 1
+
+    avatars = {c["login"]: c["avatar_url"] for c in _app_db.list_contributors(include_bots=True)}
+    everyone = set(pending) | set(reviews)
+    stats = [
+        ReviewerStat(
+            reviewer=who,
+            avatar_url=avatars.get(who, ""),
+            pending=pending.get(who, 0),
+            reviews=reviews.get(who, 0),
+            median_response_secs=_median(latencies.get(who, [])),
+            approvals=approvals.get(who, 0),
+            rubber_stamps=rubber_stamps.get(who, 0),
+            rubber_stamp_rate=(
+                round(rubber_stamps.get(who, 0) / approvals[who] * 100, 1)
+                if approvals.get(who)
+                else 0.0
+            ),
+        )
+        for who in everyone
+    ]
+    # Bottleneck first: biggest pending queue, then slowest median response.
+    stats.sort(key=lambda s: (s.pending, s.median_response_secs or 0), reverse=True)
+    return stats
 
 
 class TimeSeriesPoint(BaseModel):

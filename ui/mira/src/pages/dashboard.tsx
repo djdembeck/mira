@@ -337,6 +337,7 @@ export function DashboardPage() {
         </Card>
       </div>
 
+
       {/* Category bar chart — full width */}
       {periodStats && Object.keys(periodStats.categories).length > 0 && (
         <Card>

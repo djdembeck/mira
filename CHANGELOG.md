@@ -4,6 +4,14 @@ All notable changes to Mira are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-07-15
+
+### Added
+
+- **Review dashboard** — a new admin-only **Review** page focused on keeping a human in the loop on PR reviews: **stale / waiting PRs** (how long open, how long idle, who they're waiting on), a **reviewer-responsiveness leaderboard** that surfaces the bottleneck (pending review queue + median time to respond once requested), **throughput trends** (median time-to-first-review and time-to-merge, this week vs last), an **approved-&-merged** count, **rubber-stamp detection** (approvals with no substantive review — empty/"LGTM" body and no real inline comments — surfaced org-wide and per reviewer), and an **open-PR status board** (approved / changes-requested / awaiting). Review timing is captured live from webhooks (`pull_request_review`, review-requested) and seeded by a light GitHub backfill of open PRs + existing reviews on repo add / admin **Refresh** / the `mira backfill-contributors` CLI.
+- **Contribution analytics (secondary)** — each contributor's detail page also shows authoring stats (commits, PRs opened/merged, lines), a GitHub-style year-long contribution heatmap, and Mira's differentiated **review-quality** signal (blockers/warnings their PRs triggered + the accept rate of Mira's feedback). Contributors are keyed provider-agnostically `(provider, login)` so non-GitHub providers can be added later.
+- A reusable **DataTable** component (column defs, header sorting, standalone pagination, loading/empty states) plus an inline 5-bar **gauge**, both used across the review pages.
+
 ## [0.6.0] — 2026-07-10
 
 ### Added

@@ -633,6 +633,7 @@ class ReviewEngine:
                 tokens_used=result.token_usage.get("total_tokens", 0),
                 duration_ms=duration,
                 categories=categories,
+                author=pr_info.author,
             )
             try:
                 from mira.analysis.feedback import synthesize_rules

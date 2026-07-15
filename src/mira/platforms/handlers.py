@@ -361,6 +361,7 @@ async def run_pr_merged_learning(
                     "comment_title": meta["title"],
                     "signal": "accepted",
                     "actor": merged_by,
+                    "pr_author": pr_info.author,
                 }
             )
 
@@ -386,6 +387,7 @@ async def run_pr_merged_learning(
                     "comment_title": body[:2000],
                     "signal": "human_review",
                     "actor": hc.author,
+                    "pr_author": pr_info.author,
                 }
             )
 

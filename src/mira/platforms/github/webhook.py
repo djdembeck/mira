@@ -8,6 +8,8 @@ import hmac
 import logging
 import os
 import re
+import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import BackgroundTasks
@@ -42,6 +44,303 @@ logger = logging.getLogger(__name__)
 
 _PR_ACTIONS = {"opened", "synchronize", "reopened"}
 _PR_MERGE_ACTIONS = {"closed"}
+
+
+def _parse_iso(ts: str) -> float:
+    """GitHub ISO-8601 timestamp ('...Z') → epoch seconds. Falls back to now."""
+    if not ts:
+        return time.time()
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return time.time()
+
+
+def _is_bot_user(user: dict[str, Any]) -> bool:
+    """Whether a GitHub user object is a bot account."""
+    login = user.get("login") or ""
+    return user.get("type") == "Bot" or login.endswith("[bot]")
+
+
+def _record_pr_contribution(payload: dict[str, Any], kind: str) -> None:
+    """Record a pr_opened / pr_merged contribution from a pull_request payload.
+
+    Idempotent (keyed on pr/prm:<number>) so a `synchronize` re-fire or a
+    backfill that overlaps this webhook never double-counts. Best-effort —
+    swallows errors so analytics never breaks the review path.
+    """
+    try:
+        pr = payload.get("pull_request", {})
+        user = pr.get("user") or {}
+        login = user.get("login") or ""
+        if not login:
+            return
+        owner = payload["repository"]["owner"]["login"]
+        repo = payload["repository"]["name"]
+        number = pr["number"]
+        if kind == "pr_merged":
+            external_key = f"prm:{number}"
+            event_at = _parse_iso(pr.get("merged_at") or "")
+            merged = True
+        else:
+            external_key = f"pr:{number}"
+            event_at = _parse_iso(pr.get("created_at") or "")
+            merged = False
+
+        _get_app_db().record_contribution_for_login(
+            "github",
+            login,
+            owner,
+            repo,
+            kind,
+            external_key,
+            event_at=event_at,
+            external_id=int(user.get("id") or 0),
+            avatar_url=user.get("avatar_url") or "",
+            is_bot=_is_bot_user(user),
+            pr_number=number,
+            title=pr.get("title") or "",
+            additions=int(pr.get("additions") or 0),
+            deletions=int(pr.get("deletions") or 0),
+            changed_files=int(pr.get("changed_files") or 0),
+            merged=merged,
+        )
+    except Exception as exc:  # never let analytics break the webhook
+        logger.debug("Failed to record %s contribution: %s", kind, exc)
+
+
+def _pr_state(pr: dict[str, Any]) -> str:
+    if pr.get("merged"):
+        return "merged"
+    if pr.get("state") == "closed":
+        return "closed"
+    return "open"
+
+
+def _record_pr_lifecycle(payload: dict[str, Any]) -> None:
+    """Upsert a PR's review-insights lifecycle row from any pull_request-shaped
+    payload (pull_request, pull_request_review). Best-effort."""
+    try:
+        pr = payload.get("pull_request", {})
+        repo = payload.get("repository", {})
+        owner = repo.get("owner", {}).get("login", "")
+        name = repo.get("name", "")
+        number = pr.get("number")
+        if not owner or not name or not number:
+            return
+        _get_app_db().upsert_pull_request(
+            owner,
+            name,
+            number,
+            author=(pr.get("user") or {}).get("login", ""),
+            title=pr.get("title") or "",
+            url=pr.get("html_url") or f"https://github.com/{owner}/{name}/pull/{number}",
+            state=_pr_state(pr),
+            draft=bool(pr.get("draft")),
+            created_at=_parse_iso(pr.get("created_at") or ""),
+            updated_at=_parse_iso(pr.get("updated_at") or "") or time.time(),
+            merged_at=_parse_iso(pr["merged_at"]) if pr.get("merged_at") else 0.0,
+            closed_at=_parse_iso(pr["closed_at"]) if pr.get("closed_at") else 0.0,
+        )
+    except Exception as exc:
+        logger.debug("PR lifecycle record failed: %s", exc)
+
+
+async def handle_pr_review_meta(
+    payload: dict[str, Any],
+    app_auth: GitHubAppAuth,
+    bot_name: str,
+) -> None:
+    """Track PR review lifecycle for any pull_request event: keep the PR row
+    current and record review_requested / review_request_removed."""
+    try:
+        _record_pr_lifecycle(payload)
+        action = payload.get("action", "")
+        if action not in ("review_requested", "review_request_removed"):
+            return
+        pr = payload.get("pull_request", {})
+        repo = payload.get("repository", {})
+        owner = repo.get("owner", {}).get("login", "")
+        name = repo.get("name", "")
+        number = pr.get("number")
+        reviewer = (payload.get("requested_reviewer") or {}).get("login", "")
+        if not reviewer or not number:
+            return  # team requests (requested_team) have no single login — skip
+        app_db = _get_app_db()
+        if action == "review_requested":
+            app_db.upsert_pr_reviewer(owner, name, number, reviewer, requested_at=time.time())
+        else:
+            app_db.remove_pr_reviewer(owner, name, number, reviewer)
+    except Exception:
+        logger.exception("Error handling PR review meta")
+
+
+async def _classify_bare_approval(
+    payload: dict[str, Any],
+    app_auth: GitHubAppAuth,
+    owner: str,
+    name: str,
+    number: int,
+    review: dict[str, Any],
+) -> int:
+    """1 if this approval is a rubber-stamp (no substantive body or inline
+    comments), else 0. Best-effort — any failure returns 0 and the next backfill
+    reclassifies."""
+    from mira.platforms.github.review_signals import is_bare_approval, is_substantive
+
+    body = review.get("body") or ""
+    # A substantive summary already disqualifies it — no API call needed.
+    if is_substantive(body):
+        return 0
+    try:
+        installation_id = payload.get("installation", {}).get("id", 0)
+        token = await app_auth.get_installation_token(installation_id)
+        provider = create_provider("github", token)
+        pr_info = PRInfo(
+            title="",
+            description="",
+            base_branch="",
+            head_branch="",
+            url=f"https://github.com/{owner}/{name}/pull/{number}",
+            number=number,
+            owner=owner,
+            repo=name,
+        )
+        comments = await provider.get_review_inline_comments(pr_info, int(review.get("id") or 0))
+    except Exception as exc:
+        logger.debug("Could not fetch review comments for bare-approval check: %s", exc)
+        comments = []
+    return int(is_bare_approval("approved", body, comments))
+
+
+async def handle_pull_request_review(
+    payload: dict[str, Any],
+    app_auth: GitHubAppAuth,
+    bot_name: str,
+) -> None:
+    """Handle a submitted human review: record responsiveness + the review
+    contribution, and stamp the PR's first-review time."""
+    try:
+        if payload.get("action") != "submitted":
+            return
+        review = payload.get("review", {})
+        user = review.get("user") or {}
+        reviewer = user.get("login", "")
+        if not reviewer or _is_bot_user(user):
+            return  # ignore Mira's own and other bot reviews
+        pr = payload.get("pull_request", {})
+        author = (pr.get("user") or {}).get("login", "")
+        if reviewer == author:
+            return  # a self-review isn't a review of someone else's work
+        repo = payload.get("repository", {})
+        owner = repo.get("owner", {}).get("login", "")
+        name = repo.get("name", "")
+        number = pr.get("number")
+        if not number:
+            return
+        submitted = _parse_iso(review.get("submitted_at") or "")
+        state = (review.get("state") or "").lower()
+
+        # Classify rubber-stamp approvals (best-effort; backfill is the source of
+        # truth). Only approvals can be bare, and a substantive body short-circuits
+        # before we spend an API call fetching inline comments.
+        bare = 0
+        if state == "approved":
+            bare = await _classify_bare_approval(payload, app_auth, owner, name, number, review)
+
+        _record_pr_lifecycle(payload)
+        app_db = _get_app_db()
+        app_db.upsert_pr_reviewer(
+            owner, name, number, reviewer, responded_at=submitted, state=state, bare_approval=bare
+        )
+        app_db.set_pr_first_review(owner, name, number, submitted)
+        # Also count it as a review contribution for the heatmap.
+        app_db.record_contribution_for_login(
+            "github",
+            reviewer,
+            owner,
+            name,
+            "review",
+            f"review:{review.get('id')}",
+            event_at=submitted,
+            external_id=int(user.get("id") or 0),
+            avatar_url=user.get("avatar_url") or "",
+            pr_number=number,
+            title=pr.get("title") or "",
+        )
+    except Exception:
+        logger.exception("Error handling pull_request_review")
+
+
+def _record_push_commits(payload: dict[str, Any]) -> None:
+    """Record per-commit contributions from a push to the default branch.
+
+    Mirrors GitHub's contribution graph (default-branch commits). Keyed on
+    commit:<sha> so the same commit arriving via push and later via backfill
+    is counted once. Best-effort — never breaks the indexing path.
+    """
+    try:
+        repository = payload.get("repository", {})
+        default_branch = repository.get("default_branch", "main")
+        if payload.get("ref", "") != f"refs/heads/{default_branch}":
+            return
+        owner = repository["owner"]["login"]
+        repo = repository["name"]
+        app_db = _get_app_db()
+        for commit in payload.get("commits", []):
+            sha = commit.get("id") or ""
+            author = commit.get("author") or {}
+            login = author.get("username") or ""
+            if not sha or not login:
+                # No GitHub login (only an email) → can't attribute; skip.
+                continue
+            ts = commit.get("timestamp") or ""
+            try:
+                event_at = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                event_at = time.time()
+            app_db.record_contribution_for_login(
+                "github",
+                login,
+                owner,
+                repo,
+                "commit",
+                f"commit:{sha}",
+                event_at=event_at,
+                title=(commit.get("message") or "").split("\n", 1)[0][:200],
+            )
+    except Exception as exc:
+        logger.debug("Failed to record push commits: %s", exc)
+
+
+def _schedule_contributor_backfill(
+    app_auth: GitHubAppAuth, installation_id: int, repos: list[dict[str, Any]]
+) -> None:
+    """Kick off a one-time historical contributor backfill for newly added
+    repos. Runs in the background, one repo at a time to spare the API budget."""
+    import asyncio
+
+    from mira.platforms.github.contributor_backfill import backfill_repo_contributions
+
+    pairs: list[tuple[str, str]] = []
+    for repo_info in repos:
+        full_name = repo_info.get("full_name", "")
+        if "/" in full_name:
+            owner, repo = full_name.split("/", 1)
+            pairs.append((owner, repo))
+    if not pairs:
+        return
+
+    async def _run() -> None:
+        for owner, repo in pairs:
+            try:
+                await backfill_repo_contributions(
+                    owner, repo, app_auth, installation_id=installation_id
+                )
+            except Exception:
+                logger.exception("Auto-backfill failed for %s/%s", owner, repo)
+
+    asyncio.create_task(_run())
 
 
 async def _handle_thread_freeform_reply(
@@ -116,6 +415,19 @@ async def dispatch_github_event(
     avoid review loops.
     """
     action = payload.get("action", "")
+
+    # Track PR review lifecycle for every pull_request event (open/close/
+    # ready/review_requested/...), independent of the review-trigger logic
+    # below — so review-insights data stays current even for paused/ignored
+    # PRs. Doesn't return; falls through to the review-trigger branches.
+    if event == "pull_request" and payload.get("sender", {}).get("login", "") != f"{bot_name}[bot]":
+        background_tasks.add_task(handle_pr_review_meta, payload, app_auth, bot_name)
+
+    # A human submitted a review — capture responsiveness + the review event.
+    if event == "pull_request_review" and action == "submitted":
+        if payload.get("sender", {}).get("login", "") != f"{bot_name}[bot]":
+            background_tasks.add_task(handle_pull_request_review, payload, app_auth, bot_name)
+        return "processing"
 
     if (
         event == "pull_request"
@@ -218,6 +530,11 @@ async def handle_pull_request(
 
         provider = create_provider("github", token)
         is_private = bool(payload["repository"].get("private", False))
+
+        # Record the authoring contribution before review so it lands even if
+        # the review itself fails. Idempotent on every synchronize re-fire.
+        _record_pr_contribution(payload, "pr_opened")
+
         await run_pr_review(provider, owner, repo, number, pr_url, is_private, bot_name)
     except Exception as exc:
         logger.exception("Error handling pull_request event")
@@ -402,6 +719,9 @@ async def handle_pr_merged(
         number = pr["number"]
         pr_url = f"https://github.com/{owner}/{repo}/pull/{number}"
 
+        # Record the merge contribution (idempotent on prm:<number>).
+        _record_pr_contribution(payload, "pr_merged")
+
         token = await app_auth.get_installation_token(installation_id)
         provider = create_provider("github", token)
 
@@ -417,6 +737,7 @@ async def handle_pr_merged(
             owner=owner,
             repo=repo,
             head_sha=pr["head"].get("sha") or "",
+            author=(pr.get("user") or {}).get("login", ""),
         )
         merged_by = (pr.get("merged_by") or {}).get("login", "")
         await run_pr_merged_learning(provider, pr_info, bot_name, merged_by)
@@ -549,6 +870,7 @@ async def handle_installation(
         import asyncio
 
         asyncio.create_task(_count_files_for_repos(app_auth, installation_id, repos))
+        _schedule_contributor_backfill(app_auth, installation_id, repos)
 
         # Notify connected clients
         from mira.dashboard.events import bus
@@ -639,6 +961,7 @@ async def handle_repos_added(
         import asyncio
 
         asyncio.create_task(_count_files_for_repos(app_auth, installation_id, repos))
+        _schedule_contributor_backfill(app_auth, installation_id, repos)
 
         from mira.dashboard.events import bus
 
@@ -671,6 +994,10 @@ async def handle_push_index(
         owner = payload["repository"]["owner"]["login"]
         repo_name = payload["repository"]["name"]
         default_branch = payload.get("repository", {}).get("default_branch", "main")
+
+        # Record commit contributions first — independent of index status, so
+        # contributor analytics covers repos that aren't indexed for review.
+        _record_push_commits(payload)
 
         # Check repo status — only re-index repos that are already indexed
         app_db = _get_app_db()
@@ -739,16 +1066,18 @@ def _reconcile_repo_statuses() -> None:
         if r.status != "indexing":
             continue
         try:
-            store = IndexStore.open(r.owner, r.repo)
+            store = IndexStore.open(r.owner, r.repo, platform=r.platform)
             count = len(store.all_paths())
             store.close()
         except Exception:
             count = 0
         if count > 0:
-            app_db.set_repo_status(r.owner, r.repo, "ready", files_indexed=count)
+            app_db.set_repo_status(
+                r.owner, r.repo, "ready", files_indexed=count, platform=r.platform
+            )
             logger.info("Reconciled %s/%s: indexing → ready (%d files)", r.owner, r.repo, count)
         else:
-            app_db.set_repo_status(r.owner, r.repo, "pending")
+            app_db.set_repo_status(r.owner, r.repo, "pending", platform=r.platform)
             logger.info("Reconciled %s/%s: indexing → pending (no files)", r.owner, r.repo)
 
 

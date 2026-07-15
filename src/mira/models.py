@@ -380,6 +380,8 @@ class PRInfo:
     head_sha: str = ""
     # Hosting platform ("github" / "gitlab") — scopes per-PR review progress.
     platform: str = "github"
+    # Platform login of the PR author; used to attribute review-quality stats.
+    author: str = ""
 
 
 @dataclass

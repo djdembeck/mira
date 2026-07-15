@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS review_events (
     pr_number INTEGER NOT NULL DEFAULT 0,
     pr_title TEXT NOT NULL DEFAULT '',
     pr_url TEXT NOT NULL DEFAULT '',
+    -- GitHub login of the PR author, so the blockers/warnings a person's PRs
+    -- trigger can be attributed to them in contributor analytics.
+    author TEXT NOT NULL DEFAULT '',
     comments_posted INTEGER NOT NULL DEFAULT 0,
     blockers INTEGER NOT NULL DEFAULT 0,
     warnings INTEGER NOT NULL DEFAULT 0,
@@ -102,6 +105,9 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     comment_title TEXT NOT NULL DEFAULT '',
     signal TEXT NOT NULL DEFAULT '',
     actor TEXT NOT NULL DEFAULT '',
+    -- GitHub login of the PR author (distinct from `actor`, who is the human
+    -- that accepted/rejected). Lets accept/reject rate attribute to the author.
+    pr_author TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL DEFAULT 0
 );
 
@@ -201,6 +207,7 @@ class ReviewEvent:
     pr_number: int
     pr_title: str
     pr_url: str
+    author: str
     comments_posted: int
     blockers: int
     warnings: int
@@ -234,6 +241,7 @@ class FeedbackEventRow:
     comment_title: str
     signal: str
     actor: str
+    pr_author: str = ""
     created_at: float = 0.0
 
 
@@ -299,6 +307,21 @@ class IndexStore(_StoreSharedMixin):
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(files)").fetchall()}
         if "loc" not in cols:
             self._conn.execute("ALTER TABLE files ADD COLUMN loc INTEGER NOT NULL DEFAULT 0")
+        # PR-author attribution columns added for contributor analytics.
+        review_cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(review_events)").fetchall()
+        }
+        if "author" not in review_cols:
+            self._conn.execute(
+                "ALTER TABLE review_events ADD COLUMN author TEXT NOT NULL DEFAULT ''"
+            )
+        feedback_cols = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(feedback_events)").fetchall()
+        }
+        if "pr_author" not in feedback_cols:
+            self._conn.execute(
+                "ALTER TABLE feedback_events ADD COLUMN pr_author TEXT NOT NULL DEFAULT ''"
+            )
         # learned_rules.status added post-schema. Default 'approved' so existing
         # rules keep feeding reviews; new synthesized rules are inserted 'pending'.
         lr_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(learned_rules)").fetchall()}
@@ -575,18 +598,20 @@ class IndexStore(_StoreSharedMixin):
         duration_ms: int = 0,
         categories: str = "",
         created_at: float | None = None,
+        author: str = "",
     ) -> ReviewEvent:
         now = created_at if created_at is not None else time.time()
         self._conn.execute(
             "INSERT INTO review_events "
-            "(pr_number, pr_title, pr_url, comments_posted, blockers, warnings, "
+            "(pr_number, pr_title, pr_url, author, comments_posted, blockers, warnings, "
             "suggestions, files_reviewed, lines_changed, tokens_used, duration_ms, "
             "categories, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 pr_number,
                 pr_title,
                 pr_url,
+                author,
                 comments_posted,
                 blockers,
                 warnings,
@@ -606,6 +631,7 @@ class IndexStore(_StoreSharedMixin):
             pr_number=pr_number,
             pr_title=pr_title,
             pr_url=pr_url,
+            author=author,
             comments_posted=comments_posted,
             blockers=blockers,
             warnings=warnings,
@@ -620,7 +646,7 @@ class IndexStore(_StoreSharedMixin):
 
     def list_review_events(self, limit: int = 100) -> list[ReviewEvent]:
         rows = self._conn.execute(
-            "SELECT id, pr_number, pr_title, pr_url, comments_posted, blockers, warnings, "
+            "SELECT id, pr_number, pr_title, pr_url, author, comments_posted, blockers, warnings, "
             "suggestions, files_reviewed, lines_changed, tokens_used, duration_ms, "
             "categories, created_at "
             "FROM review_events ORDER BY created_at DESC LIMIT ?",
@@ -632,19 +658,60 @@ class IndexStore(_StoreSharedMixin):
                 pr_number=r[1],
                 pr_title=r[2],
                 pr_url=r[3],
-                comments_posted=r[4],
-                blockers=r[5],
-                warnings=r[6],
-                suggestions=r[7],
-                files_reviewed=r[8],
-                lines_changed=r[9],
-                tokens_used=r[10],
-                duration_ms=r[11],
-                categories=r[12],
-                created_at=r[13],
+                author=r[4],
+                comments_posted=r[5],
+                blockers=r[6],
+                warnings=r[7],
+                suggestions=r[8],
+                files_reviewed=r[9],
+                lines_changed=r[10],
+                tokens_used=r[11],
+                duration_ms=r[12],
+                categories=r[13],
+                created_at=r[14],
             )
             for r in rows
         ]
+
+    def get_review_quality_by_author(self, author: str, since: float | None = None) -> dict:
+        """Sum the blockers/warnings/suggestions raised on one author's PRs.
+
+        Mira's differentiated signal: how much review attention a contributor's
+        code drew. Keyed by GitHub login recorded on each review event.
+        """
+        where = "WHERE author = ?"
+        params: list = [author]
+        if since:
+            where += " AND created_at >= ?"
+            params.append(since)
+        row = self._conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(blockers),0), COALESCE(SUM(warnings),0), "
+            "COALESCE(SUM(suggestions),0), COALESCE(SUM(comments_posted),0) "
+            f"FROM review_events {where}",
+            tuple(params),
+        ).fetchone()
+        return {
+            "reviews": int(row[0] or 0),
+            "blockers": int(row[1] or 0),
+            "warnings": int(row[2] or 0),
+            "suggestions": int(row[3] or 0),
+            "comments_posted": int(row[4] or 0),
+        }
+
+    def get_feedback_quality_by_author(self, pr_author: str) -> dict:
+        """Accept/reject tallies for Mira's feedback on one author's PRs."""
+        rows = self._conn.execute(
+            "SELECT signal, COUNT(*) FROM feedback_events WHERE pr_author = ? GROUP BY signal",
+            (pr_author,),
+        ).fetchall()
+        counts = {signal: int(count) for signal, count in rows}
+        accepted = counts.get("accepted", 0)
+        rejected = counts.get("rejected", 0)
+        return {
+            "accepted": accepted,
+            "rejected": rejected,
+            "human_review": counts.get("human_review", 0),
+        }
 
     def get_review_stats(self, since: float | None = None) -> dict:
         """Aggregate review statistics, optionally filtered to events after *since* (epoch)."""
@@ -783,13 +850,14 @@ class IndexStore(_StoreSharedMixin):
         comment_title: str,
         signal: str,
         actor: str,
+        pr_author: str = "",
     ) -> FeedbackEventRow:
         now = time.time()
         cur = self._conn.execute(
             "INSERT INTO feedback_events "
             "(pr_number, pr_url, comment_path, comment_line, comment_category, "
-            "comment_severity, comment_title, signal, actor, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "comment_severity, comment_title, signal, actor, pr_author, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 pr_number,
                 pr_url,
@@ -800,6 +868,7 @@ class IndexStore(_StoreSharedMixin):
                 comment_title,
                 signal,
                 actor,
+                pr_author,
                 now,
             ),
         )
@@ -818,6 +887,7 @@ class IndexStore(_StoreSharedMixin):
             comment_title=comment_title,
             signal=signal,
             actor=actor,
+            pr_author=pr_author,
             created_at=now,
         )
 
@@ -841,6 +911,7 @@ class IndexStore(_StoreSharedMixin):
                 e["comment_title"],
                 e["signal"],
                 e["actor"],
+                e.get("pr_author", ""),
                 now,
             )
             for e in events
@@ -848,8 +919,8 @@ class IndexStore(_StoreSharedMixin):
         self._conn.executemany(
             "INSERT INTO feedback_events "
             "(pr_number, pr_url, comment_path, comment_line, comment_category, "
-            "comment_severity, comment_title, signal, actor, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "comment_severity, comment_title, signal, actor, pr_author, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         self._conn.commit()
@@ -858,7 +929,7 @@ class IndexStore(_StoreSharedMixin):
     def list_feedback(self, limit: int = 500) -> list[FeedbackEventRow]:
         rows = self._conn.execute(
             "SELECT id, pr_number, pr_url, comment_path, comment_line, "
-            "comment_category, comment_severity, comment_title, signal, actor, created_at "
+            "comment_category, comment_severity, comment_title, signal, actor, pr_author, created_at "
             "FROM feedback_events ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -874,7 +945,8 @@ class IndexStore(_StoreSharedMixin):
                 comment_title=r[7],
                 signal=r[8],
                 actor=r[9],
-                created_at=r[10],
+                pr_author=r[10],
+                created_at=r[11],
             )
             for r in rows
         ]
