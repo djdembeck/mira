@@ -24,7 +24,7 @@ from typing import Any
 
 from github import Github, GithubException
 
-from mira.github_app.auth import GitHubAppAuth
+from mira.platforms.github.auth import GitHubAppAuth
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ def _record_pr_insights(db: Any, owner: str, repo: str, pr: Any) -> None:
 
 
 def _record_reviews(db: Any, owner: str, repo: str, pr: Any, counts: dict[str, int]) -> None:
-    from mira.github_app.review_signals import is_bare_approval
+    from mira.platforms.github.review_signals import is_bare_approval
 
     author_login = pr.user.login if pr.user else ""
     try:

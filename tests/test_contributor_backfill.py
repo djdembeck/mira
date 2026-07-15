@@ -11,8 +11,9 @@ import pytest
 
 from mira.dashboard import api
 from mira.dashboard.db import AppDatabase
-from mira.github_app import contributor_backfill as cb
-from mira.github_app import handlers, index_handlers
+from mira.platforms.github import contributor_backfill as cb
+from mira.platforms.github import webhook as handlers
+from mira.platforms.github import webhook as index_handlers
 
 
 @pytest.fixture
@@ -71,7 +72,7 @@ def test_backfill_sync_records_prs_merges_reviews(db: AppDatabase) -> None:
 
     counts: dict[str, int] = {"prs": 0, "merges": 0, "reviews": 0, "commits": 0}
     # Drive _backfill_sync directly with a mocked Github client.
-    import mira.github_app.contributor_backfill as mod
+    import mira.platforms.github.contributor_backfill as mod
 
     orig_github = mod.Github
     mod.Github = lambda _token: gh  # type: ignore[assignment]
@@ -100,7 +101,7 @@ def test_backfill_sync_is_idempotent(db: AppDatabase) -> None:
         gh.get_repo.return_value = repo
         return gh
 
-    import mira.github_app.contributor_backfill as mod
+    import mira.platforms.github.contributor_backfill as mod
 
     orig = mod.Github
     try:

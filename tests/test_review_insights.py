@@ -12,7 +12,7 @@ import pytest
 
 from mira.dashboard import api
 from mira.dashboard.db import AppDatabase
-from mira.github_app import handlers
+from mira.platforms.github import webhook as handlers
 
 DAY = 86400
 HOUR = 3600
@@ -100,7 +100,7 @@ def test_review_summary(patched_api: AppDatabase) -> None:
 
 
 def test_is_bare_approval() -> None:
-    from mira.github_app.review_signals import is_bare_approval
+    from mira.platforms.github.review_signals import is_bare_approval
 
     assert is_bare_approval("approved", "", []) is True
     assert is_bare_approval("approved", "LGTM!", []) is True

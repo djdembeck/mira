@@ -378,7 +378,9 @@ class PRInfo:
     repo: str
     # Round 2+ reviews diff against last_reviewed_sha → head_sha; empty falls back to full diff.
     head_sha: str = ""
-    # GitHub login of the PR author; used to attribute review-quality stats.
+    # Hosting platform ("github" / "gitlab") — scopes per-PR review progress.
+    platform: str = "github"
+    # Platform login of the PR author; used to attribute review-quality stats.
     author: str = ""
 
 
