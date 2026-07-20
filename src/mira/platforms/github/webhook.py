@@ -416,6 +416,7 @@ async def dispatch_github_event(
     avoid review loops.
     """
     action = payload.get("action", "")
+    cfg = load_config()
 
     # Track PR review lifecycle for every pull_request event (open/close/
     # ready/review_requested/...), independent of the review-trigger logic
@@ -445,7 +446,7 @@ async def dispatch_github_event(
         if sender == f"{bot_name}[bot]":
             logger.debug("Ignoring pull_request event from self (%s)", sender)
             return "ignored"
-        cfg = load_config()
+
         if author_is_filtered(sender, cfg.filter.allowed_authors, cfg.filter.blocked_authors):
             owner = payload.get("repository", {}).get("owner", {}).get("login", "?")
             repo = payload.get("repository", {}).get("name", "?")
@@ -481,7 +482,6 @@ async def dispatch_github_event(
         if "pull_request" in payload.get("issue", {}) and has_mention(comment_body, names):
             cmd_word = command_after_mention(comment_body, names)
             if cmd_word != "review":
-                cfg = load_config()
                 if author_is_filtered(
                     comment_user, cfg.filter.allowed_authors, cfg.filter.blocked_authors
                 ):
@@ -528,7 +528,6 @@ async def dispatch_github_event(
         default_branch = payload.get("repository", {}).get("default_branch", "main")
         if ref == f"refs/heads/{default_branch}":
             sender = payload.get("sender", {}).get("login", "")
-            cfg = load_config()
             if author_is_filtered(sender, cfg.filter.allowed_authors, cfg.filter.blocked_authors):
                 logger.debug("push to %s skipped — author %s filtered", ref, sender)
                 return "ignored"

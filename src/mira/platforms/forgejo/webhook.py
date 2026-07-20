@@ -358,6 +358,7 @@ async def dispatch_forgejo_event(
     bot_identity = await auth.get_bot_identity()
     if actor and bot_identity and actor == bot_identity:
         return "ignored"
+    cfg = load_config()
 
     if event == "pull_request":
         action = payload.get("action", "")
@@ -368,7 +369,7 @@ async def dispatch_forgejo_event(
                 owner, repo_name = _split_repo_path(full_name)
             except ValueError:
                 owner, repo_name = "?", "?"
-            cfg = load_config()
+
             if author_is_filtered(actor, cfg.filter.allowed_authors, cfg.filter.blocked_authors):
                 logger.debug(
                     "PR %s/%s#%s skipped — author %s filtered by author filter",
@@ -384,7 +385,6 @@ async def dispatch_forgejo_event(
         return "ignored"
 
     if event == "push":
-        cfg = load_config()
         if author_is_filtered(actor, cfg.filter.allowed_authors, cfg.filter.blocked_authors):
             logger.debug("push ignored — author %s filtered", actor)
             return "ignored"
@@ -399,7 +399,6 @@ async def dispatch_forgejo_event(
         if has_mention(comment_body, names):
             cmd_word = command_after_mention(comment_body, names)
             if cmd_word != "review":
-                cfg = load_config()
                 if author_is_filtered(
                     actor, cfg.filter.allowed_authors, cfg.filter.blocked_authors
                 ):
