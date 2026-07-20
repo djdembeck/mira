@@ -15,12 +15,18 @@ from typing import Any
 
 import httpx
 
+from mira.config import load_config
 from mira.platforms import profiles
 from mira.platforms.auth import PlatformAuth
 from mira.platforms.fetch import _next_link, make_fetcher
-from mira.platforms.mentions import author_is_filtered, command_after_mention, has_mention, mention_names, strip_mentions
+from mira.platforms.mentions import (
+    author_is_filtered,
+    command_after_mention,
+    has_mention,
+    mention_names,
+    strip_mentions,
+)
 from mira.providers import create_provider
-from mira.config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +318,9 @@ async def dispatch_gitlab_event(
             cmd_word = command_after_mention(attrs.get("note") or "", names)
             if cmd_word != "review":
                 cfg = load_config()
-                if author_is_filtered(actor, cfg.filter.allowed_authors, cfg.filter.blocked_authors):
+                if author_is_filtered(
+                    actor, cfg.filter.allowed_authors, cfg.filter.blocked_authors
+                ):
                     logger.debug("MR note skipped — author %s filtered", actor)
                     return "ignored"
             background_tasks.add_task(handle_gitlab_note, payload, auth, bot_name)

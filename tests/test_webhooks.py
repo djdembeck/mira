@@ -420,8 +420,6 @@ async def test_review_comment_still_dispatches_handle_comment(
     assert resp.status_code == 200
     assert resp.json()["status"] == "processing"
     mock_comment.assert_awaited_once()
-    mock_pause.assert_not_awaited()
-# ── PR author allowlist / denylist tests ─────────────────────────────────────
 
 
 async def _post(client: AsyncClient, event: str, payload: dict) -> dict:
@@ -444,9 +442,7 @@ async def _post(client: AsyncClient, event: str, payload: dict) -> dict:
 async def test_pr_opened_blocked_author_filtered(
     mock_handler: AsyncMock, mock_load_config, client: AsyncClient
 ) -> None:
-    mock_load_config.return_value = MiraConfig(
-        filter=FilterConfig(blocked_authors=["dependabot"])
-    )
+    mock_load_config.return_value = MiraConfig(filter=FilterConfig(blocked_authors=["dependabot"]))
     payload = _make_pr_payload()
     payload["sender"] = {"login": "dependabot[bot]"}
     result = await _post(client, "pull_request", payload)
@@ -459,9 +455,7 @@ async def test_pr_opened_blocked_author_filtered(
 async def test_pr_opened_allowed_author_not_filtered(
     mock_handler: AsyncMock, mock_load_config, client: AsyncClient
 ) -> None:
-    mock_load_config.return_value = MiraConfig(
-        filter=FilterConfig(blocked_authors=["dependabot"])
-    )
+    mock_load_config.return_value = MiraConfig(filter=FilterConfig(blocked_authors=["dependabot"]))
     payload = _make_pr_payload()
     payload["sender"] = {"login": "alice"}
     result = await _post(client, "pull_request", payload)
@@ -474,9 +468,7 @@ async def test_pr_opened_allowed_author_not_filtered(
 async def test_pr_opened_allowlist_filters_off_list(
     mock_handler: AsyncMock, mock_load_config, client: AsyncClient
 ) -> None:
-    mock_load_config.return_value = MiraConfig(
-        filter=FilterConfig(allowed_authors=["alice"])
-    )
+    mock_load_config.return_value = MiraConfig(filter=FilterConfig(allowed_authors=["alice"]))
     payload = _make_pr_payload()
     payload["sender"] = {"login": "bob"}
     result = await _post(client, "pull_request", payload)
@@ -489,9 +481,7 @@ async def test_pr_opened_allowlist_filters_off_list(
 async def test_push_blocked_author_filtered(
     mock_handler: AsyncMock, mock_load_config, client: AsyncClient
 ) -> None:
-    mock_load_config.return_value = MiraConfig(
-        filter=FilterConfig(blocked_authors=["dependabot"])
-    )
+    mock_load_config.return_value = MiraConfig(filter=FilterConfig(blocked_authors=["dependabot"]))
     payload = {
         "ref": "refs/heads/main",
         "sender": {"login": "dependabot[bot]"},
@@ -509,9 +499,7 @@ async def test_comment_review_bypass_for_blocked_author(
     mock_handler: AsyncMock, mock_load_config, client: AsyncClient
 ) -> None:
     """Manual @mira-bot review bypasses the author filter."""
-    mock_load_config.return_value = MiraConfig(
-        filter=FilterConfig(blocked_authors=["dependabot"])
-    )
+    mock_load_config.return_value = MiraConfig(filter=FilterConfig(blocked_authors=["dependabot"]))
     payload = _comment_payload(f"@{BOT_NAME} review")
     payload["comment"]["user"]["login"] = "dependabot[bot]"
     result = await _post(client, "issue_comment", payload)
@@ -525,10 +513,22 @@ async def test_comment_non_review_no_bypass(
     mock_handler: AsyncMock, mock_load_config, client: AsyncClient
 ) -> None:
     """Non-review commands do NOT bypass the author filter."""
-    mock_load_config.return_value = MiraConfig(
-        filter=FilterConfig(blocked_authors=["alice"])
-    )
+    mock_load_config.return_value = MiraConfig(filter=FilterConfig(blocked_authors=["alice"]))
     payload = _comment_payload(f"@{BOT_NAME} pause")
     result = await _post(client, "issue_comment", payload)
     assert result["status"] == "ignored"
     mock_handler.assert_not_awaited()
+
+
+@patch("mira.platforms.github.webhook.load_config")
+@patch("mira.platforms.github.webhook.handle_comment", new_callable=AsyncMock)
+async def test_comment_case_insensitive_review_bypass(
+    mock_handler: AsyncMock, mock_load_config, client: AsyncClient
+) -> None:
+    """Case-insensitive @mira-bot Review bypasses the author filter."""
+    mock_load_config.return_value = MiraConfig(filter=FilterConfig(blocked_authors=["dependabot"]))
+    payload = _comment_payload(f"@{BOT_NAME} Review")
+    payload["comment"]["user"]["login"] = "dependabot[bot]"
+    result = await _post(client, "issue_comment", payload)
+    assert result["status"] == "processing"
+    mock_handler.assert_awaited_once()

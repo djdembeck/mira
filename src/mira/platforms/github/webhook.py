@@ -452,7 +452,10 @@ async def dispatch_github_event(
             number = payload.get("pull_request", {}).get("number", 0)
             logger.debug(
                 "PR %s/%s#%s skipped — author %s filtered by author filter",
-                owner, repo, number, sender,
+                owner,
+                repo,
+                number,
+                sender,
             )
             return "ignored"
         names = mention_names(bot_name, await app_auth.get_bot_identity())
@@ -479,7 +482,9 @@ async def dispatch_github_event(
             cmd_word = command_after_mention(comment_body, names)
             if cmd_word != "review":
                 cfg = load_config()
-                if author_is_filtered(comment_user, cfg.filter.allowed_authors, cfg.filter.blocked_authors):
+                if author_is_filtered(
+                    comment_user, cfg.filter.allowed_authors, cfg.filter.blocked_authors
+                ):
                     logger.debug(
                         "issue_comment skipped — author %s filtered by author filter",
                         comment_user,

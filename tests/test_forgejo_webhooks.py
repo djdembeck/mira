@@ -68,21 +68,23 @@ def _comment_payload(body: str, login: str):
 @pytest.mark.asyncio
 async def test_pr_opened_blocked_author_filtered(client):
     """Blocked author with [bot] suffix is filtered for PR opened."""
-    with patch("mira.platforms.forgejo.webhook.handle_forgejo_pr", new=AsyncMock()) as h:
-        with patch(
+    with (
+        patch("mira.platforms.forgejo.webhook.handle_forgejo_pr", new=AsyncMock()) as h,
+        patch(
             "mira.platforms.forgejo.webhook.load_config",
             return_value=MiraConfig(filter=FilterConfig(blocked_authors=["dependabot"])),
-        ):
-            payload = _pr_payload("opened", "dependabot[bot]")
-            body = json.dumps(payload).encode()
-            resp = await client.post(
-                "/forgejo/webhook",
-                content=body,
-                headers={
-                    "X-Forgejo-Event": "pull_request",
-                    "X-Forgejo-Signature": _sign(body),
-                },
-            )
+        ),
+    ):
+        payload = _pr_payload("opened", "dependabot[bot]")
+        body = json.dumps(payload).encode()
+        resp = await client.post(
+            "/forgejo/webhook",
+            content=body,
+            headers={
+                "X-Forgejo-Event": "pull_request",
+                "X-Forgejo-Signature": _sign(body),
+            },
+        )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
     h.assert_not_called()
@@ -91,21 +93,23 @@ async def test_pr_opened_blocked_author_filtered(client):
 @pytest.mark.asyncio
 async def test_pr_opened_allowed_author_not_filtered(client):
     """Non-blocked author passes through the filter."""
-    with patch("mira.platforms.forgejo.webhook.handle_forgejo_pr", new=AsyncMock()) as h:
-        with patch(
+    with (
+        patch("mira.platforms.forgejo.webhook.handle_forgejo_pr", new=AsyncMock()) as h,
+        patch(
             "mira.platforms.forgejo.webhook.load_config",
             return_value=MiraConfig(filter=FilterConfig(blocked_authors=["dependabot"])),
-        ):
-            payload = _pr_payload("opened", "alice")
-            body = json.dumps(payload).encode()
-            resp = await client.post(
-                "/forgejo/webhook",
-                content=body,
-                headers={
-                    "X-Forgejo-Event": "pull_request",
-                    "X-Forgejo-Signature": _sign(body),
-                },
-            )
+        ),
+    ):
+        payload = _pr_payload("opened", "alice")
+        body = json.dumps(payload).encode()
+        resp = await client.post(
+            "/forgejo/webhook",
+            content=body,
+            headers={
+                "X-Forgejo-Event": "pull_request",
+                "X-Forgejo-Signature": _sign(body),
+            },
+        )
     assert resp.status_code == 200
     assert resp.json()["status"] == "processing"
     h.assert_awaited_once()
@@ -114,21 +118,23 @@ async def test_pr_opened_allowed_author_not_filtered(client):
 @pytest.mark.asyncio
 async def test_pr_opened_allowlist_filters_off_list(client):
     """Allowlist set but author not on it → filtered."""
-    with patch("mira.platforms.forgejo.webhook.handle_forgejo_pr", new=AsyncMock()) as h:
-        with patch(
+    with (
+        patch("mira.platforms.forgejo.webhook.handle_forgejo_pr", new=AsyncMock()) as h,
+        patch(
             "mira.platforms.forgejo.webhook.load_config",
             return_value=MiraConfig(filter=FilterConfig(allowed_authors=["alice"])),
-        ):
-            payload = _pr_payload("opened", "bob")
-            body = json.dumps(payload).encode()
-            resp = await client.post(
-                "/forgejo/webhook",
-                content=body,
-                headers={
-                    "X-Forgejo-Event": "pull_request",
-                    "X-Forgejo-Signature": _sign(body),
-                },
-            )
+        ),
+    ):
+        payload = _pr_payload("opened", "bob")
+        body = json.dumps(payload).encode()
+        resp = await client.post(
+            "/forgejo/webhook",
+            content=body,
+            headers={
+                "X-Forgejo-Event": "pull_request",
+                "X-Forgejo-Signature": _sign(body),
+            },
+        )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
     h.assert_not_called()

@@ -59,6 +59,23 @@ def author_is_filtered(login: str, allowed: list[str], blocked: list[str]) -> bo
     variants = {login, login.removesuffix("[bot]")}
     if any(v in blocked for v in variants):
         return True
-    if allowed and not any(v in allowed for v in variants):
+    return bool(allowed and not any(v in allowed for v in variants))
+
+
+def check_author_filter(actor: str, *, log_msg: str = "") -> bool:
+    """Check if an actor is filtered by the author allowlist/denylist.
+
+    Returns True if the actor should be filtered (ignored).
+    Logs a debug message with the provided log_msg.
+    """
+    from logging import getLogger
+
+    from mira.config import load_config
+
+    logger = getLogger(__name__)
+    config = load_config()
+    if author_is_filtered(actor, config.filter.allowed_authors, config.filter.blocked_authors):
+        if log_msg:
+            logger.debug(log_msg, actor)
         return True
     return False

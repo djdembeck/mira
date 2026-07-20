@@ -39,7 +39,6 @@ def test_command_after_mention():
     assert command_after_mention("nothing", names) == ""
 
 
-
 def test_author_is_filtered_blocked_by_raw_login():
     assert author_is_filtered("alice", [], ["alice"]) is True
 

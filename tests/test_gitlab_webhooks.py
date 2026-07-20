@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from mira.config import FilterConfig, MiraConfig
 from mira.platforms.gitlab.auth import GitLabTokenAuth
 from mira.platforms.server import create_app
-from mira.config import FilterConfig, MiraConfig
 
 GL_SECRET = "gl-secret"
 BOT = "mira-bot"
