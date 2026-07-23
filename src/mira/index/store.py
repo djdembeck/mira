@@ -678,9 +678,17 @@ class IndexStore(_StoreSharedMixin):
             "categories": cat_counts,
         }
 
+    # Fingerprints untouched this long belong to closed/abandoned PRs — prune
+    # them on write so the table doesn't grow forever.
+    _FINGERPRINT_TTL = 30 * 86400
+
     def upsert_pr_fingerprint(self, fp: PRFingerprint) -> None:
         """Insert or update the change fingerprint for a PR in this repo."""
         now = fp.updated_at or time.time()
+        self._conn.execute(
+            "DELETE FROM pr_fingerprints WHERE updated_at < ?",
+            (now - self._FINGERPRINT_TTL,),
+        )
         self._conn.execute(
             """INSERT INTO pr_fingerprints
                    (pr_number, head_sha, title, body, paths, symbols, updated_at)

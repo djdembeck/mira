@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 
 from mira.config import MiraConfig
 from mira.core.noise_filter import _jaccard_similarity
@@ -109,13 +110,15 @@ async def detect_overlaps(
     current: PRFingerprint,
     cached: dict[int, PRFingerprint],
     candidates: list[OpenPRRef],
+    save_fp: Callable[[PRFingerprint], None] | None = None,
 ) -> list[OverlapFinding]:
     """Return confirmed overlaps between ``pr_info`` and other open PRs.
 
     ``cached`` maps PR number → fingerprint for PRs Mira has already reviewed.
     ``candidates`` are the open PRs to consider (already excluding the current
     PR, drafts, and bots). Candidates without a fresh cached fingerprint have
-    their changed files fetched on demand via ``provider.get_pr_files``.
+    their changed files fetched on demand via ``provider.get_pr_files`` and
+    persisted through ``save_fp`` so the next review skips the fetch.
     """
     overlap_cfg = config.review.overlap
 
@@ -144,6 +147,11 @@ async def detect_overlaps(
                 paths=paths,
                 symbols=[],
             )
+            if save_fp is not None:
+                try:
+                    save_fp(fp)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Fingerprint save failed for #%s: %s", ref.number, exc)
         keep, shared = _prefilter(
             current, fp, title_threshold=overlap_cfg.title_similarity_threshold
         )

@@ -59,6 +59,22 @@ def test_fingerprint_upsert_replaces_on_same_pr(store):
     assert rows[0].paths == ["a.py", "c.py"]
 
 
+def test_fingerprint_upsert_prunes_stale_rows(store):
+    import time
+
+    now = time.time()
+    old = _fp(1)
+    old.updated_at = now - IndexStore._FINGERPRINT_TTL - 3600
+    fresh = _fp(2)
+    fresh.updated_at = now - 60
+    store.upsert_pr_fingerprint(old)
+    store.upsert_pr_fingerprint(fresh)
+    store.upsert_pr_fingerprint(_fp(3))
+
+    numbers = {fp.pr_number for fp in store.list_pr_fingerprints()}
+    assert numbers == {2, 3}
+
+
 # ── Pre-filter lanes ──────────────────────────────────────────────────────
 
 
@@ -228,6 +244,33 @@ async def test_detect_overlaps_confirms_file_conflict():
     assert findings[0].pr_number == 2
     assert findings[0].kind == "merge_conflict"
     assert findings[0].shared_files == ["auth.py"]
+
+
+@pytest.mark.asyncio
+async def test_detect_overlaps_persists_fetched_fingerprints():
+    cfg = MiraConfig()
+    pr = _pr_info(number=1)
+    current = _fp(1, title="Refactor auth", paths=["auth.py"])
+    # PR 2 has a fresh cached fingerprint, PR 3 is unseen → fetched + saved.
+    candidates = [_ref(2, head_sha="s2"), _ref(3, head_sha="s3")]
+    cached = {2: _fp(2, paths=["auth.py"], head_sha="s2")}
+    provider = _FakeProvider({3: ["auth.py"]})
+    llm = _FakeLLM('{"overlaps": []}')
+    saved = []
+
+    await detect_overlaps(
+        provider=provider,
+        llm=llm,
+        config=cfg,
+        pr_info=pr,
+        current=current,
+        cached=cached,
+        candidates=candidates,
+        save_fp=saved.append,
+    )
+    assert [fp.pr_number for fp in saved] == [3]
+    assert saved[0].paths == ["auth.py"]
+    assert saved[0].head_sha == "s3"
 
 
 @pytest.mark.asyncio

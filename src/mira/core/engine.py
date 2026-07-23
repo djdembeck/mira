@@ -325,7 +325,7 @@ class ReviewEngine:
         PRs can compare against it without re-fetching its files. Runs in
         parallel with the main review (see review_pr).
         """
-        if not self.config.review.overlap.enabled:
+        if not self.config.review.overlap.enabled or self.dry_run:
             return []
         provider = self.provider
         if provider is None or not hasattr(provider, "list_open_prs"):
@@ -360,33 +360,34 @@ class ReviewEngine:
                     for fp in store.list_pr_fingerprints()
                     if fp.pr_number != pr_info.number
                 }
+
+                cfg = self.config.review.overlap
+                candidates = await provider.list_open_prs(
+                    pr_info.owner, pr_info.repo, limit=cfg.max_candidates
+                )
+                bot = (self.bot_name or "").removesuffix("[bot]").lower()
+                candidates = [
+                    c
+                    for c in candidates
+                    if c.number != pr_info.number
+                    and not c.draft
+                    and c.author.removesuffix("[bot]").lower() != bot
+                ]
+                if not candidates:
+                    return []
+
+                return await detect_overlaps(
+                    provider=provider,
+                    llm=self.llm,
+                    config=self.config,
+                    pr_info=pr_info,
+                    current=current_fp,
+                    cached=cached,
+                    candidates=candidates,
+                    save_fp=store.upsert_pr_fingerprint,
+                )
             finally:
                 store.close()
-
-            cfg = self.config.review.overlap
-            candidates = await provider.list_open_prs(
-                pr_info.owner, pr_info.repo, limit=cfg.max_candidates
-            )
-            bot = (self.bot_name or "").removesuffix("[bot]").lower()
-            candidates = [
-                c
-                for c in candidates
-                if c.number != pr_info.number
-                and not c.draft
-                and c.author.removesuffix("[bot]").lower() != bot
-            ]
-            if not candidates:
-                return []
-
-            return await detect_overlaps(
-                provider=provider,
-                llm=self.llm,
-                config=self.config,
-                pr_info=pr_info,
-                current=current_fp,
-                cached=cached,
-                candidates=candidates,
-            )
         except Exception as exc:
             logger.warning("Overlap detection failed, continuing: %s", exc)
             return []
@@ -476,6 +477,9 @@ class ReviewEngine:
             logger.warning("Failed to compute review round: %s", exc)
 
         # Round 2+ uses incremental diff to avoid re-flagging untouched files.
+        # Overlap detection keeps the full diff — its fingerprint must cover the
+        # whole PR, not just the latest commits.
+        full_diff_text = diff_text
         if review_round >= 2 and pr_info.head_sha:
             try:
                 from mira.dashboard.api import _app_db
@@ -527,21 +531,28 @@ class ReviewEngine:
             pass
 
         # Cross-PR overlap detection runs alongside the main review — it only
-        # needs the diff + GitHub, not the review output.
-        overlap_task = _asyncio.create_task(
-            self._detect_overlaps_safe(pr_info, diff_text)
-        )
+        # needs the diff + GitHub, not the review output. Skipped when the
+        # review itself is skipped (empty incremental diff): findings only
+        # surface in the walkthrough, which won't be posted.
+        overlap_task = None
+        if diff_text.strip():
+            overlap_task = _asyncio.create_task(self._detect_overlaps_safe(pr_info, full_diff_text))
 
-        result = await self._review_diff_internal(
-            diff_text,
-            pr_title=pr_info.title,
-            pr_description=pr_info.description,
-            existing_comments=unresolved_threads or None,
-            on_walkthrough_ready=_on_walkthrough_ready,
-            review_round=review_round,
-            resolved_threads=resolved_thread_dicts or None,
-            team_conventions=team_conventions,
-        )
+        try:
+            result = await self._review_diff_internal(
+                diff_text,
+                pr_title=pr_info.title,
+                pr_description=pr_info.description,
+                existing_comments=unresolved_threads or None,
+                on_walkthrough_ready=_on_walkthrough_ready,
+                review_round=review_round,
+                resolved_threads=resolved_thread_dicts or None,
+                team_conventions=team_conventions,
+            )
+        except BaseException:
+            if overlap_task is not None:
+                overlap_task.cancel()
+            raise
 
         # The final walkthrough must land after the in-progress one, or it gets
         # overwritten on fast PRs and stays stuck on "in progress".
@@ -551,8 +562,9 @@ class ReviewEngine:
                 await notify_task
 
         overlaps: list[OverlapFinding] = []
-        with contextlib.suppress(Exception):
-            overlaps = await overlap_task
+        if overlap_task is not None:
+            with contextlib.suppress(Exception):
+                overlaps = await overlap_task
 
         if result.walkthrough:
             _clamp_confidence_to_findings(result.walkthrough, result.comments)

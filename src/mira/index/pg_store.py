@@ -17,6 +17,7 @@ from mira.index.store import (
     ExternalRef,
     FeedbackEventRow,
     FileSummary,
+    IndexStore,
     LearnedRuleRow,
     ReviewContext,
     ReviewEvent,
@@ -731,6 +732,10 @@ class PgIndexStore(_StoreSharedMixin):
     def upsert_pr_fingerprint(self, fp: PRFingerprint) -> None:
         now = fp.updated_at or time.time()
         with self._conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM pr_fingerprints WHERE owner=%s AND repo=%s AND updated_at < %s",
+                (self._owner, self._repo, now - IndexStore._FINGERPRINT_TTL),
+            )
             cur.execute(
                 "INSERT INTO pr_fingerprints "
                 "(owner, repo, pr_number, head_sha, title, body, paths, symbols, updated_at) "
