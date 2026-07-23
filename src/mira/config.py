@@ -47,8 +47,8 @@ class LLMConfig(BaseModel):
     review_reasoning_effort: str | None = None
     reasoning_effort: str | None = None
     temperature: float = 0.2
-    max_tokens: int = 4096
-    max_context_tokens: int = 120_000
+    max_tokens: int = 32000
+    max_context_tokens: int = 200_000
     # Provider selection. "openai" uses any OpenAI-compatible endpoint (default).
     # "bedrock" uses AWS Bedrock Converse API directly (requires boto3).
     provider: str = "openai"
