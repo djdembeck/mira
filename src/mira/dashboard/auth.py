@@ -69,7 +69,9 @@ def create_auth_router(db: AppDatabase) -> APIRouter:
             token,
             httponly=True,
             samesite="lax",
-            # Secure when served over HTTPS (directly or via X-Forwarded-Proto)
+            # Secure when served over HTTPS. Behind a TLS-terminating proxy this
+            # relies on uvicorn honoring X-Forwarded-Proto (trusted from
+            # 127.0.0.1 by default; see the deployment docs for other setups).
             secure=request.url.scheme == "https",
             max_age=86400 * 7,
         )
