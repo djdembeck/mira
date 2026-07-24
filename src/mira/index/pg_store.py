@@ -962,7 +962,7 @@ class PgIndexStore(_StoreSharedMixin):
         if not comments:
             return
         now = time.time()
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.executemany(
                 "INSERT INTO review_comments (owner, repo, review_id, pr_number, pr_url, "
                 "path, line, severity, category, title, body, github_comment_id, created_at) "
@@ -1027,7 +1027,7 @@ class PgIndexStore(_StoreSharedMixin):
         created_at: float | None = None,
     ) -> ReplyRow:
         now = created_at if created_at is not None else time.time()
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 "INSERT INTO pr_replies (owner, repo, pr_number, pr_url, author, "
                 "author_avatar_url, body, comment_path, comment_line, github_comment_id, "

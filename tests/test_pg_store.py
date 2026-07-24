@@ -26,6 +26,10 @@ class _FakeCursor:
         self._cur.execute(sql.replace("%s", "?"), params)
         return self
 
+    def executemany(self, sql, seq_of_params):
+        self._cur.executemany(sql.replace("%s", "?"), seq_of_params)
+        return self
+
     def fetchone(self):
         return self._cur.fetchone()
 
@@ -39,7 +43,8 @@ class _FakeCursor:
 class _FakeConn:
     def __init__(self):
         self._conn = sqlite3.connect(":memory:")
-        self._conn.executescript(_PG_SCHEMA)
+        # SERIAL isn't a rowid alias in SQLite — ids would insert as NULL.
+        self._conn.executescript(_PG_SCHEMA.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY"))
 
     def cursor(self):
         return _FakeCursor(self._conn)
@@ -100,6 +105,41 @@ def test_fingerprint_upsert_prunes_stale_rows(store):
 
     numbers = {fp.pr_number for fp in store.list_pr_fingerprints()}
     assert numbers == {2, 3}
+
+
+def test_add_and_list_review_comments(store):
+    store.add_review_comments(
+        1,
+        42,
+        "https://github.com/acme/widgets/pull/42",
+        [
+            {"path": "a.py", "line": 3, "severity": "warning", "title": "t1", "body": "b1"},
+            {"path": "b.py", "line": 9, "severity": "blocker", "title": "t2", "body": "b2"},
+        ],
+    )
+
+    rows = store.list_review_comments(42)
+    assert [(r.path, r.line, r.severity) for r in rows] == [
+        ("a.py", 3, "warning"),
+        ("b.py", 9, "blocker"),
+    ]
+
+
+def test_record_and_list_replies(store):
+    row = store.record_reply(
+        42,
+        "https://github.com/acme/widgets/pull/42",
+        author="alice",
+        body="looks fixed",
+        comment_path="a.py",
+        comment_line=3,
+    )
+    assert row.id > 0
+
+    rows = store.list_replies(42)
+    assert len(rows) == 1
+    assert rows[0].author == "alice"
+    assert rows[0].body == "looks fixed"
 
 
 def test_fingerprints_scoped_by_repo(fake_conn):
