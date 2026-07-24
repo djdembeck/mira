@@ -58,7 +58,7 @@ def create_auth_router(db: AppDatabase) -> APIRouter:
     router = APIRouter(prefix="/api/auth", tags=["auth"])
 
     @router.post("/login")
-    def login(body: LoginRequest, response: Response) -> dict:
+    def login(body: LoginRequest, request: Request, response: Response) -> dict:
         user = db.authenticate(body.username, body.password)
         if not user:
             return JSONResponse(status_code=401, content={"error": "Invalid credentials"})
@@ -69,6 +69,8 @@ def create_auth_router(db: AppDatabase) -> APIRouter:
             token,
             httponly=True,
             samesite="lax",
+            # Secure when served over HTTPS (directly or via X-Forwarded-Proto)
+            secure=request.url.scheme == "https",
             max_age=86400 * 7,
         )
         return {
