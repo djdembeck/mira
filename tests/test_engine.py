@@ -62,7 +62,8 @@ class TestSecurityFileFilter:
         keep = [k.path for k in _security_relevant_files(files)]
         assert "app/controllers/embed_controller.rb" in keep
         assert "app/assets/javascripts/embed.js" in keep
-        assert all("/migrate/" not in p for p in keep)
+        # Migrations are no longer stripped — DDL can contain security-relevant logic.
+        assert "db/migrate/20131217174004_create_topic_embeds.rb" in keep
         assert all("spec/" not in p for p in keep)
         assert all(not p.endswith(".scss") for p in keep)
         assert all(not p.endswith(".lock") for p in keep)
@@ -1727,6 +1728,91 @@ class TestSecurityReviewPass:
 
         out = await security_review_pass(llm, files, files, "title")
         assert out == []
+
+    @pytest.mark.asyncio
+    async def test_uses_security_llm_not_main_llm(self, sample_diff_text):
+        """When security_llm is passed, it is called — not the main llm."""
+        from mira.core.diff_parser import parse_diff
+        from mira.core.passes import security_review_pass
+
+        files = parse_diff(sample_diff_text).files
+        cited_line = None
+        for h in files[0].hunks:
+            for raw in h.content.splitlines():
+                if raw.startswith("+") and not raw.startswith("+++"):
+                    cited_line = raw[1:]
+                    break
+            if cited_line:
+                break
+
+        canned = json.dumps(
+            {
+                "comments": [
+                    {
+                        "path": files[0].path,
+                        "line": 1,
+                        "severity": "blocker",
+                        "category": "security",
+                        "title": "XSS",
+                        "body": "Reflected XSS.",
+                        "confidence": 0.9,
+                        "existing_code": cited_line,
+                    }
+                ],
+                "summary": "",
+                "metadata": {"reviewed_files": 1},
+            }
+        )
+
+        security_llm_mock = MagicMock(spec=LLMProvider)
+        security_llm_mock.complete_with_tools = AsyncMock(return_value=canned)
+        security_llm_mock.count_tokens = MagicMock(return_value=100)
+
+        main_llm_mock = MagicMock(spec=LLMProvider)
+        main_llm_mock.complete_with_tools = AsyncMock(side_effect=RuntimeError("should not be called"))
+
+        out = await security_review_pass(main_llm_mock, files, files, "title", security_llm=security_llm_mock)
+        assert len(out) == 1
+        security_llm_mock.complete_with_tools.assert_called_once()
+        main_llm_mock.complete_with_tools.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chunking_splits_large_diff(self):
+        """With small budget, security pass splits files into chunks."""
+        from mira.core.passes import security_review_pass
+
+        # Create enough files to trigger chunking with a tiny budget
+        files = []
+        for i in range(5):
+            hunk_content = f"+{'x' * 500}\n" * 10  # ~125 tokens per file
+            files.append(
+                FileDiff(
+                    path=f"src/file{i}.py",
+                    change_type=FileChangeType.MODIFIED,
+                    language="python",
+                    added_lines=10,
+                    deleted_lines=0,
+                    hunks=[
+                        SimpleNamespace(target_start=1, content=hunk_content)
+                    ],
+                )
+            )
+
+        canned = json.dumps({"comments": [], "summary": "", "metadata": {"reviewed_files": 1}})
+
+        llm = MagicMock(spec=LLMProvider)
+        llm.complete_with_tools = AsyncMock(return_value=canned)
+        llm.count_tokens = MagicMock(return_value=100)
+
+        with patch("mira.core.passes.load_config") as mock_cfg:
+            cfg = MiraConfig()
+            cfg.llm.max_context_tokens = 500  # tiny budget forces chunking
+            mock_cfg.return_value = cfg
+
+            out = await security_review_pass(llm, files, files, "title")
+            assert out == []
+            # Should have been called more than once (multiple chunks)
+            assert llm.complete_with_tools.call_count >= 2
 
 
 class TestDependencyReviewPass:

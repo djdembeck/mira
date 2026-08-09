@@ -105,12 +105,14 @@ async def run_pr_review(
 
     llm = create_llm(llm_config_for("review", config.llm))
     indexing_llm = create_llm(llm_config_for("indexing", config.llm))
+    security_llm = create_llm(llm_config_for("security", config.llm))
     engine = ReviewEngine(
         config=config,
         llm=llm,
         provider=provider,
         bot_name=bot_name,
         indexing_llm=indexing_llm,
+        security_llm=security_llm,
     )
 
     from mira.dashboard.api import _app_db
@@ -183,6 +185,7 @@ async def run_pr_command(
 
     llm = create_llm(llm_config_for("review", config.llm))
     indexing_llm = create_llm(llm_config_for("indexing", config.llm))
+    security_llm = create_llm(llm_config_for("security", config.llm))
 
     normalized = question.lower().strip()
     is_review = normalized in _REVIEW_KEYWORDS
@@ -213,6 +216,7 @@ async def run_pr_command(
             provider=provider,
             bot_name=bot_name,
             indexing_llm=indexing_llm,
+            security_llm=security_llm,
         )
         engine._review_only_paths = set(progress.skipped_paths)  # type: ignore[attr-defined]
         if not review_tracker.try_start(repo_full, number, pr_title, pr_url):
@@ -234,6 +238,7 @@ async def run_pr_command(
             provider=provider,
             bot_name=bot_name,
             indexing_llm=indexing_llm,
+            security_llm=security_llm,
         )
         if not review_tracker.try_start(repo_full, number, pr_title, pr_url):
             logger.info("Review already in progress for %s, skipping", pr_url)

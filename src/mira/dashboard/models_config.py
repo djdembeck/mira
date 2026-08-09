@@ -85,6 +85,20 @@ def get_review_model(config: LLMConfig, db_value: str | None = None) -> str:
     return config.model
 
 
+def get_security_model(config: LLMConfig, db_value: str | None = None) -> str:
+    """Resolve the security-pass model: DB → config.security_model → review tier.
+
+    Never falls back to ``indexing_model`` — the security sweep is the
+    highest-stakes cheap pass, and silently downgrading it to the indexing
+    tier trades security recall for indexing cost savings.
+    """
+    if db_value:
+        return db_value
+    if config.security_model:
+        return config.security_model
+    return get_review_model(config)
+
+
 def get_review_thinking_mode(config: LLMConfig, db_value: str | None = None) -> str | None:
     """Resolve the review thinking mode: DB → config.review_reasoning_effort → None.
 
@@ -117,6 +131,9 @@ def llm_config_for(purpose: str, base: LLMConfig) -> LLMConfig:
             elif purpose == "review":
                 db_model = _app_db.get_setting("review_model")
                 db_thinking = _app_db.get_setting("review_thinking_mode")
+            elif purpose == "security":
+                db_model = _app_db.get_setting("security_model")
+                db_thinking = _app_db.get_setting("review_thinking_mode")
     except Exception:
         pass  # DB not available — resolve from config fields alone
 
@@ -125,6 +142,10 @@ def llm_config_for(purpose: str, base: LLMConfig) -> LLMConfig:
     if purpose == "indexing":
         resolved = get_indexing_model(base, db_model)
         config_model = base.indexing_model
+    elif purpose == "security":
+        resolved = get_security_model(base, db_model)
+        config_model = base.security_model or base.review_model
+        thinking_mode = get_review_thinking_mode(base, db_thinking)
     elif purpose == "review":
         resolved = get_review_model(base, db_model)
         config_model = base.review_model
