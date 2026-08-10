@@ -1405,10 +1405,9 @@ class TestGetPRDiff406Fallback:
 
         parsed = parse_diff(result)
 
-        # unidiff emits a ghost MODIFIED entry for /dev/null added-files,
-        # so the real file count is 101 but unidiff reports 102.
-        meaningful = [f for f in parsed.files if f.added_lines + f.deleted_lines > 0]
-        assert len(meaningful) == 101
+        # With "new file mode" header, all 101 files parse correctly as
+        # their true change_type (no ghost MODIFIED entry for added files).
+        assert len(parsed.files) == 101
 
         # Verify the added file from page 2 round-trips
         assert "+++ b/page2/added.py" in result
@@ -1458,3 +1457,70 @@ class TestGetPRDiff406Fallback:
         assert len(parsed.files) == 1
         assert parsed.files[0].change_type == FileChangeType.RENAMED
         assert parsed.files[0].old_path == "old.py"
+
+    @pytest.mark.asyncio
+    async def test_406_fallback_all_statuses_parse(self):
+        """Each file status round-trips through parse_diff with correct change_type."""
+        provider = GitHubProvider.__new__(GitHubProvider)
+        provider._token = "test-token"
+        pr_info = _make_pr_info()
+
+        call_count = 0
+
+        async def _mock_get(self, url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return httpx.Response(
+                    406,
+                    text="",
+                    request=httpx.Request("GET", url),
+                )
+            files = [
+                {
+                    "filename": "added.py",
+                    "status": "added",
+                    "patch": "@@ -0,0 +1,1 @@\n+new",
+                },
+                {
+                    "filename": "removed.py",
+                    "status": "removed",
+                    "patch": "@@ -1,1 +0,0 @@\n-gone",
+                },
+                {
+                    "filename": "renamed.py",
+                    "previous_filename": "old.py",
+                    "status": "renamed",
+                    "patch": "@@ -1 +1 @@\n-old\n+new",
+                },
+                {
+                    "filename": "modified.py",
+                    "status": "modified",
+                    "patch": "@@ -1 +1 @@\n-old\n+new",
+                },
+            ]
+            return httpx.Response(
+                200,
+                json=files,
+                request=httpx.Request("GET", url),
+            )
+
+        with patch.object(httpx.AsyncClient, "get", _mock_get):
+            result = await provider.get_pr_diff(pr_info)
+
+        # All four statuses must parse without error
+        parsed = parse_diff(result)
+        assert len(parsed.files) == 4
+
+        # Verify each file has the correct change_type
+        by_path = {f.path: f for f in parsed.files}
+
+        assert by_path["added.py"].change_type == FileChangeType.ADDED
+        assert by_path["removed.py"].change_type == FileChangeType.DELETED
+        assert by_path["modified.py"].change_type == FileChangeType.MODIFIED
+
+        # Renamed file: old_path is the source, path is the destination
+        renamed = [f for f in parsed.files if f.change_type == FileChangeType.RENAMED]
+        assert len(renamed) == 1
+        assert renamed[0].old_path == "old.py"
+        assert renamed[0].path == "renamed.py"

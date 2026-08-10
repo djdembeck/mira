@@ -167,9 +167,19 @@ def _file_to_diff(f: dict[str, Any]) -> str:
             f"+++ b/{path}",
         ]
     elif status == "added":
-        header = [f"diff --git a/{path} b/{path}", "--- /dev/null", f"+++ b/{path}"]
+        header = [
+            f"diff --git a/{path} b/{path}",
+            "new file mode 100644",
+            "--- /dev/null",
+            f"+++ b/{path}",
+        ]
     elif status == "removed":
-        header = [f"diff --git a/{path} b/{path}", f"--- a/{path}", "+++ /dev/null"]
+        header = [
+            f"diff --git a/{path} b/{path}",
+            "deleted file mode 100644",
+            f"--- a/{path}",
+            "+++ /dev/null",
+        ]
     else:
         header = [f"diff --git a/{path} b/{path}", f"--- a/{path}", f"+++ b/{path}"]
     return "\n".join(header) + "\n" + patch
