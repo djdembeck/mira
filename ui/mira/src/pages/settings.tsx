@@ -32,11 +32,14 @@ export function SettingsPage() {
   // "" = inherit from deployment config; anything else is a model id.
   const [indexingModel, setIndexingModel] = useState("")
   const [reviewModel, setReviewModel] = useState("")
+  const [securityModel, setSecurityModel] = useState("")
   const [configIndexingModel, setConfigIndexingModel] = useState("")
   const [configReviewModel, setConfigReviewModel] = useState("")
+  const [configSecurityModel, setConfigSecurityModel] = useState("")
   const [backend, setBackend] = useState("")
   const [indexingOptions, setIndexingOptions] = useState<ModelOption[]>([])
   const [reviewOptions, setReviewOptions] = useState<ModelOption[]>([])
+  const [securityOptions, setSecurityOptions] = useState<ModelOption[]>([])
   const [thinkingMode, setThinkingMode] = useState("off")
   const [thinkingOptions, setThinkingOptions] = useState<ModelOption[]>([])
   const [savingModels, setSavingModels] = useState(false)
@@ -67,11 +70,14 @@ export function SettingsPage() {
     api.getModels().then((m) => {
       setIndexingModel(m.indexing_source === "config" ? "" : m.indexing_model)
       setReviewModel(m.review_source === "config" ? "" : m.review_model)
+      setSecurityModel(m.security_source === "config" ? "" : m.security_model)
       setConfigIndexingModel(m.config_indexing_model)
       setConfigReviewModel(m.config_review_model)
+      setConfigSecurityModel(m.config_security_model)
       setBackend(m.backend)
       setIndexingOptions(m.indexing_options)
       setReviewOptions(m.review_options)
+      setSecurityOptions(m.security_options)
       setThinkingMode(m.review_thinking_mode)
       setThinkingOptions(m.thinking_options)
     })
@@ -99,7 +105,7 @@ export function SettingsPage() {
 
   const saveModels = async () => {
     setSavingModels(true)
-    await api.saveModels(indexingModel, reviewModel, thinkingMode)
+    await api.saveModels(indexingModel, reviewModel, securityModel, thinkingMode)
     setSavingModels(false)
     setModelsSaved(true)
     setTimeout(() => setModelsSaved(false), 2000)
@@ -352,6 +358,20 @@ export function SettingsPage() {
               <p className="text-xs text-muted-foreground">
                 Used to analyze PRs and post review comments. A more powerful
                 model gives better review quality.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Security Model</label>
+              <ModelCombobox
+                value={securityModel}
+                onChange={setSecurityModel}
+                options={securityOptions}
+                configModel={configSecurityModel}
+              />
+              <p className="text-xs text-muted-foreground">
+                Used for the dedicated security pass. Defaults to the review
+                model — set a cheaper one only if you accept lower security
+                recall.
               </p>
             </div>
             <div className="space-y-2">

@@ -357,14 +357,18 @@ class ModelOption(BaseModel):
 class ModelsResponse(BaseModel):
     indexing_model: str
     review_model: str
+    security_model: str
     backend: str  # "openrouter" | "bedrock" | "openai-compatible"
     indexing_source: str  # "dashboard" (DB override) | "config" (mira.yaml)
     review_source: str
+    security_source: str
     # What each model resolves to with no override — the "inherit" target.
     config_indexing_model: str
     config_review_model: str
+    config_security_model: str
     indexing_options: list[ModelOption]
     review_options: list[ModelOption]
+    security_options: list[ModelOption]
     # Extended-thinking effort for reviews ("off"/"low"/"medium"/"high").
     review_thinking_mode: str
     thinking_options: list[ModelOption]
@@ -373,6 +377,7 @@ class ModelsResponse(BaseModel):
 class ModelsUpdate(BaseModel):
     indexing_model: str
     review_model: str
+    security_model: str = ""
     review_thinking_mode: str = "off"
 
 

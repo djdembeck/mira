@@ -37,6 +37,39 @@ class TestGetSecurityModel:
         assert result == "base"
         assert result != "cheap"
 
+    def test_db_review_model_is_fallback(self):
+        """A dashboard-set review model must win over config.model."""
+        config = LLMConfig(model="base")
+        assert get_security_model(config, db_review_model="db-review") == "db-review"
+
+    def test_config_security_model_beats_db_review(self):
+        config = LLMConfig(model="base", security_model="sec-model")
+        assert (
+            get_security_model(config, db_review_model="db-review") == "sec-model"
+        )
+
+    def test_db_value_beats_db_review(self):
+        config = LLMConfig(model="base")
+        assert (
+            get_security_model(config, db_value="db-sec", db_review_model="db-review")
+            == "db-sec"
+        )
+
+
+class TestLlmConfigForSecurityDbReview:
+    """llm_config_for(\"security\") falls back to the dashboard review model."""
+
+    def test_falls_back_to_db_review_model(self):
+        class _FakeDB:
+            def get_setting(self, key: str) -> str | None:
+                return {"review_model": "db-review"}.get(key)
+
+        base = LLMConfig(model="base")
+        with patch("mira.dashboard.api._app_db", _FakeDB()):
+            config = llm_config_for("security", base)
+
+        assert config.model == "db-review"
+
 
 class TestLlmConfigForSecurity:
     """llm_config_for(\"security\", base) resolves the security tier."""
