@@ -1411,7 +1411,11 @@ class TestGetPRDiff406Fallback:
 
         # Verify the added file from page 2 round-trips
         assert "+++ b/page2/added.py" in result
-        added = [f for f in parsed.files if f.path == "page2/added.py" and f.change_type == FileChangeType.ADDED]
+        added = [
+            f
+            for f in parsed.files
+            if f.path == "page2/added.py" and f.change_type == FileChangeType.ADDED
+        ]
         assert len(added) == 1
         assert added[0].change_type == FileChangeType.ADDED
 
