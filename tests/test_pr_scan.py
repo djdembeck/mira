@@ -17,6 +17,7 @@ from mira.security.pr_scan import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _hunk(target_start: int, content: str) -> HunkInfo:
     return HunkInfo(
         source_start=1,
@@ -42,6 +43,7 @@ def _file_diff(path: str, hunks: list[HunkInfo]) -> FileDiff:
 # _added_line_hits unit test
 # ---------------------------------------------------------------------------
 
+
 class TestAddedLineHits:
     """_added_line_hits correctly maps @@ header to target_start."""
 
@@ -49,12 +51,7 @@ class TestAddedLineHits:
         """Off-by-one guard: @@ header does NOT increment line_no."""
         hunk = _hunk(
             target_start=5,
-            content=(
-                "@@ -1,3 +1,4 @@\n"
-                "-old\n"
-                "+lodash\n"
-                "+new\n"
-            ),
+            content=("@@ -1,3 +1,4 @@\n-old\n+lodash\n+new\n"),
         )
         diff = _file_diff("x.txt", [hunk])
 
@@ -67,12 +64,7 @@ class TestAddedLineHits:
     def test_second_added_line_advances(self):
         hunk = _hunk(
             target_start=5,
-            content=(
-                "@@ -1,3 +1,4 @@\n"
-                "-old\n"
-                "+lodash\n"
-                "+new\n"
-            ),
+            content=("@@ -1,3 +1,4 @@\n-old\n+lodash\n+new\n"),
         )
         diff = _file_diff("x.txt", [hunk])
 
@@ -83,14 +75,7 @@ class TestAddedLineHits:
     def test_context_and_removed_lines_advance_counter(self):
         hunk = _hunk(
             target_start=1,
-            content=(
-                "@@ -1,5 +1,6 @@\n"
-                "ctx\n"
-                "-old\n"
-                "ctx2\n"
-                "+lodash\n"
-                "+sec\n"
-            ),
+            content=("@@ -1,5 +1,6 @@\nctx\n-old\nctx2\n+lodash\n+sec\n"),
         )
         diff = _file_diff("x.txt", [hunk])
 
@@ -115,8 +100,8 @@ class TestAddedLineHits:
 # scan_manifest_changes integration tests
 # ---------------------------------------------------------------------------
 
-class TestScanManifestChanges:
 
+class TestScanManifestChanges:
     @pytest.mark.asyncio
     async def test_added_vulnerable_dep(self):
         """Added vulnerable dep → one correctly-anchored blocker comment."""
@@ -127,21 +112,23 @@ class TestScanManifestChanges:
             advisory_url="https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
             fixed_in="4.17.21",
         )
-        fake_qb = AsyncMock(return_value={
-            ("npm", "lodash", "4.17.20"): [vuln],
-        })
+        fake_qb = AsyncMock(
+            return_value={
+                ("npm", "lodash", "4.17.20"): [vuln],
+            }
+        )
 
         fetcher = MagicMock()
-        fetcher.fetch = AsyncMock(return_value=(
-            '{"dependencies": {"lodash": "4.17.20"}}'
-        ))
+        fetcher.fetch = AsyncMock(return_value=('{"dependencies": {"lodash": "4.17.20"}}'))
 
         diff = _file_diff(
             "package.json",
-            [_hunk(
-                target_start=2,
-                content='@@ -1,2 +1,3 @@\n+    "lodash": "4.17.20"\n',
-            )],
+            [
+                _hunk(
+                    target_start=2,
+                    content='@@ -1,2 +1,3 @@\n+    "lodash": "4.17.20"\n',
+                )
+            ],
         )
 
         with patch("mira.security.pr_scan.query_batch", fake_qb):
@@ -161,17 +148,17 @@ class TestScanManifestChanges:
         fake_qb = AsyncMock(return_value={})
 
         fetcher = MagicMock()
-        fetcher.fetch = AsyncMock(return_value=(
-            '{"dependencies": {"lodash": "4.17.20"}}'
-        ))
+        fetcher.fetch = AsyncMock(return_value=('{"dependencies": {"lodash": "4.17.20"}}'))
 
         # Hunk adds a line that does NOT contain "lodash"
         diff = _file_diff(
             "package.json",
-            [_hunk(
-                target_start=1,
-                content='@@ -1,2 +1,3 @@\n+    "express": "4.0.0"\n',
-            )],
+            [
+                _hunk(
+                    target_start=1,
+                    content='@@ -1,2 +1,3 @@\n+    "express": "4.0.0"\n',
+                )
+            ],
         )
 
         with patch("mira.security.pr_scan.query_batch", fake_qb):
@@ -194,16 +181,16 @@ class TestScanManifestChanges:
         fake_qb = AsyncMock(side_effect=Exception("network fail"))
 
         fetcher = MagicMock()
-        fetcher.fetch = AsyncMock(return_value=(
-            '{"dependencies": {"lodash": "4.17.20"}}'
-        ))
+        fetcher.fetch = AsyncMock(return_value=('{"dependencies": {"lodash": "4.17.20"}}'))
 
         diff = _file_diff(
             "package.json",
-            [_hunk(
-                target_start=1,
-                content='@@ -1,2 +1,3 @@\n+    "lodash": "4.17.20"\n',
-            )],
+            [
+                _hunk(
+                    target_start=1,
+                    content='@@ -1,2 +1,3 @@\n+    "lodash": "4.17.20"\n',
+                )
+            ],
         )
 
         with patch("mira.security.pr_scan.query_batch", fake_qb):
@@ -233,16 +220,16 @@ class TestScanManifestChanges:
         fake_qb = AsyncMock()
 
         fetcher = MagicMock()
-        fetcher.fetch = AsyncMock(return_value=(
-            "FROM node:18\nRUN npm install lodash\n"
-        ))
+        fetcher.fetch = AsyncMock(return_value=("FROM node:18\nRUN npm install lodash\n"))
 
         diff = _file_diff(
             "Dockerfile",
-            [_hunk(
-                target_start=1,
-                content='@@ -1 +2 @@\n+FROM node:18\n',
-            )],
+            [
+                _hunk(
+                    target_start=1,
+                    content="@@ -1 +2 @@\n+FROM node:18\n",
+                )
+            ],
         )
 
         with patch("mira.security.pr_scan.query_batch", fake_qb):

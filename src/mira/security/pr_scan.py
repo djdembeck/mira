@@ -155,19 +155,21 @@ async def scan_manifest_changes(
             f"Update any associated lockfile entries."
         )
 
-        comments.append(ReviewComment(
-            path=f.path,
-            line=line_no,
-            end_line=None,
-            severity=severity,
-            category="security",
-            title=f"Known vulnerabilities in {q.name}@{q.version}",
-            body=body,
-            confidence=0.9,
-            suggestion=None,
-            agent_prompt=agent_prompt,
-            existing_code=line_text,
-            source_pass="osv",
-        ))
+        comments.append(
+            ReviewComment(
+                path=f.path,
+                line=line_no,
+                end_line=None,
+                severity=severity,
+                category="security",
+                title=f"Known vulnerabilities in {q.name}@{q.version}",
+                body=body,
+                confidence=0.9,
+                suggestion=None,
+                agent_prompt=agent_prompt,
+                existing_code=line_text,
+                source_pass="osv",
+            )
+        )
 
     return comments

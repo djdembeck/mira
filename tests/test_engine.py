@@ -1769,9 +1769,13 @@ class TestSecurityReviewPass:
         security_llm_mock.count_tokens = MagicMock(return_value=100)
 
         main_llm_mock = MagicMock(spec=LLMProvider)
-        main_llm_mock.complete_with_tools = AsyncMock(side_effect=RuntimeError("should not be called"))
+        main_llm_mock.complete_with_tools = AsyncMock(
+            side_effect=RuntimeError("should not be called")
+        )
 
-        out = await security_review_pass(main_llm_mock, files, files, "title", security_llm=security_llm_mock)
+        out = await security_review_pass(
+            main_llm_mock, files, files, "title", security_llm=security_llm_mock
+        )
         assert len(out) == 1
         security_llm_mock.complete_with_tools.assert_called_once()
         main_llm_mock.complete_with_tools.assert_not_called()
@@ -1792,9 +1796,7 @@ class TestSecurityReviewPass:
                     language="python",
                     added_lines=10,
                     deleted_lines=0,
-                    hunks=[
-                        SimpleNamespace(target_start=1, content=hunk_content)
-                    ],
+                    hunks=[SimpleNamespace(target_start=1, content=hunk_content)],
                 )
             )
 

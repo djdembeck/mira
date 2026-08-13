@@ -44,15 +44,12 @@ class TestGetSecurityModel:
 
     def test_config_security_model_beats_db_review(self):
         config = LLMConfig(model="base", security_model="sec-model")
-        assert (
-            get_security_model(config, db_review_model="db-review") == "sec-model"
-        )
+        assert get_security_model(config, db_review_model="db-review") == "sec-model"
 
     def test_db_value_beats_db_review(self):
         config = LLMConfig(model="base")
         assert (
-            get_security_model(config, db_value="db-sec", db_review_model="db-review")
-            == "db-sec"
+            get_security_model(config, db_value="db-sec", db_review_model="db-review") == "db-sec"
         )
 
 
@@ -80,9 +77,7 @@ class TestLlmConfigForSecurity:
             review_model="review",
             security_model="sec-model",
         )
-        with patch(
-            "mira.dashboard.models_config._app_db", None, create=True
-        ):
+        with patch("mira.dashboard.models_config._app_db", None, create=True):
             config = llm_config_for("security", base)
 
         assert config.model == "sec-model"
@@ -93,9 +88,7 @@ class TestLlmConfigForSecurity:
             model="base",
             review_reasoning_effort="medium",
         )
-        with patch(
-            "mira.dashboard.models_config._app_db", None, create=True
-        ):
+        with patch("mira.dashboard.models_config._app_db", None, create=True):
             config = llm_config_for("security", base)
 
         assert config.reasoning_effort == "medium"

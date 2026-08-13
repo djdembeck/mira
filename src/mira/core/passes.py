@@ -168,7 +168,9 @@ async def security_review_pass(
 
     logger.info(
         "Security pass: splitting %d files into %d chunks (single-call budget %d tokens)",
-        len(target_files), len(chunks), budget,
+        len(target_files),
+        len(chunks),
+        budget,
     )
     sem = asyncio.Semaphore(load_config().review.max_concurrent_chunks)
 

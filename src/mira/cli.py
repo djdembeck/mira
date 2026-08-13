@@ -217,7 +217,12 @@ def review(
             ) from err
 
     engine = ReviewEngine(
-        config=config, llm=llm, provider=github_provider, dry_run=dry_run, indexing_llm=indexing_llm, security_llm=security_llm
+        config=config,
+        llm=llm,
+        provider=github_provider,
+        dry_run=dry_run,
+        indexing_llm=indexing_llm,
+        security_llm=security_llm,
     )
 
     try:
