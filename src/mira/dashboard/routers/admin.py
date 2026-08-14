@@ -154,11 +154,13 @@ async def get_models() -> ModelsResponse:
     from mira.config import load_config
     from mira.dashboard.model_catalog import active_backend, build_options, fetch_catalog
     from mira.dashboard.models_config import (
+        API_STYLES,
         THINKING_MODES,
         get_indexing_model,
         get_review_model,
         get_review_thinking_mode,
         get_security_model,
+        resolve_api_style,
     )
 
     config = load_config()
@@ -171,6 +173,7 @@ async def get_models() -> ModelsResponse:
     thinking = get_review_thinking_mode(
         config.llm, _api._app_db.get_setting("review_thinking_mode")
     )
+    api_style = resolve_api_style(config.llm, _api._app_db.get_setting("api_style"))
 
     backend = active_backend(config.llm)
     catalog = await fetch_catalog(config.llm)
@@ -191,6 +194,8 @@ async def get_models() -> ModelsResponse:
         security_options=[ModelOption(**m) for m in build_options(backend, catalog, "review")],
         review_thinking_mode=thinking or "off",
         thinking_options=[ModelOption(**m) for m in THINKING_MODES],
+        api_style=api_style,
+        api_style_options=[ModelOption(**m) for m in API_STYLES],
     )
 
 
@@ -257,12 +262,17 @@ def set_global_settings(body: GlobalSettingsUpdate, request: Request) -> dict:
 @router.put("/api/settings/models")
 def set_models(body: ModelsUpdate, request: Request) -> dict:
     _require_admin(request)
-    from mira.dashboard.models_config import THINKING_MODE_VALUES
+    from mira.dashboard.models_config import API_STYLE_VALUES, THINKING_MODE_VALUES
 
     if body.review_thinking_mode not in THINKING_MODE_VALUES:
         raise HTTPException(
             status_code=400,
             detail=f"{body.review_thinking_mode!r} is not a valid thinking mode.",
+        )
+    if body.api_style not in API_STYLE_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{body.api_style!r} is not a valid API style.",
         )
     # "" clears the override so mira.yaml is authoritative again. Any other id
     # is stored as-is — the dashboard accepts the same free-form model ids as
@@ -279,6 +289,13 @@ def set_models(body: ModelsUpdate, request: Request) -> dict:
         _api._app_db.set_setting("review_thinking_mode", body.review_thinking_mode)
     else:
         _api._app_db.set_setting("review_thinking_mode", "")
+
+    # Clear "chat" (default) to "" so a stored value never shadows mira.yaml config overrides.
+    if body.api_style and body.api_style != "chat":
+        _api._app_db.set_setting("api_style", body.api_style)
+    else:
+        _api._app_db.set_setting("api_style", "")
+
     _api._app_db.mark_setup_complete()
     return {"ok": True}
 
