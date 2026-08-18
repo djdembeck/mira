@@ -136,7 +136,7 @@ class ReviewComment:
     agent_prompt: str | None = None
     # Verbatim diff snippet used by self-critique; stripped before posting.
     existing_code: str = ""
-    # Which pipeline pass produced this ("main" or "security") — lets eval
+    # Which pipeline pass produced this ("main", "security", or "osv") — lets eval
     # artifacts attribute FP share per pass. Not posted anywhere.
     source_pass: str = "main"
 

@@ -130,9 +130,6 @@ def _clamp_confidence_to_findings(
 # Paths excluded from the dedicated security pass — see core/passes.py.
 # Keep conservative: anything that might house auth/crypto/origin/injection logic stays in.
 _SECURITY_PASS_SKIP_PATTERNS = (
-    # DB migrations: schema changes, indexes — no request handling.
-    "db/migrate/",
-    "/migrations/",
     # Tests: assertions about behavior, not the behavior itself.
     "spec/",
     "/__tests__/",
@@ -183,7 +180,7 @@ def _security_relevant_files(files: list) -> list:
     """Return the subset of files plausibly containing security findings.
 
     The dedicated security pass runs as one LLM call across the entire
-    diff. When the diff is dominated by migrations / specs / lockfiles,
+    diff. When the diff is dominated by specs / lockfiles,
     those non-code files dilute attention away from the actual vulnerable
     code. This filter trims the obvious-no-finding cases so the model can
     focus.
@@ -386,10 +383,12 @@ class ReviewEngine:
         bot_name: str = "miracodeai",
         dry_run: bool = False,
         indexing_llm: LLMProviderProtocol | None = None,
+        security_llm: LLMProviderProtocol | None = None,
     ) -> None:
         self.config = config
         self.llm = llm
         self.indexing_llm = indexing_llm or llm
+        self.security_llm = security_llm or llm
         self.provider = provider
         self.bot_name = bot_name
         self.dry_run = dry_run
@@ -1392,7 +1391,7 @@ class ReviewEngine:
                 filtered,
                 _security_relevant_files(filtered),
                 pr_title,
-                indexing_llm=self.indexing_llm,
+                security_llm=self.security_llm,
             )
             if self.config.review.security_pass
             else _asyncio.sleep(0, result=[])
@@ -1404,6 +1403,7 @@ class ReviewEngine:
         # present (empty list on an unindexed repo — pass falls back to the diff).
         manifest_files = manifest_candidates
         existing_packages: list[str] = []
+        pr_source_fetcher = None
         if manifest_files:
             pr_info = getattr(self, "_pr_info", None)
             if pr_info is not None:
@@ -1419,6 +1419,12 @@ class ReviewEngine:
                         _pkg_store.close()
                 except Exception as exc:
                     logger.debug("Manifest package lookup failed: %s", exc)
+                if self.provider is not None:
+                    from mira.index.context import ProviderSourceFetcher
+
+                    pr_source_fetcher = ProviderSourceFetcher(
+                        self.provider, pr_info, pr_info.head_branch
+                    )
         dependency_task = _asyncio.create_task(
             dependency_review_pass(
                 self.llm,
@@ -1431,8 +1437,16 @@ class ReviewEngine:
             else _asyncio.sleep(0, result=[])
         )
 
-        chunk_results, security_comments, dependency_comments = await _asyncio.gather(
-            review_task, security_task, dependency_task
+        from mira.security.pr_scan import scan_manifest_changes
+
+        osv_task = _asyncio.create_task(
+            scan_manifest_changes(manifest_files, pr_source_fetcher)
+            if manifest_files and self.config.review.osv_scan and pr_source_fetcher is not None
+            else _asyncio.sleep(0, result=[])
+        )
+
+        chunk_results, security_comments, dependency_comments, osv_comments = await _asyncio.gather(
+            review_task, security_task, dependency_task, osv_task
         )
 
         all_comments: list[ReviewComment] = []
@@ -1446,7 +1460,10 @@ class ReviewEngine:
                 summaries.append(summary_text)
         audit.append({"stage": "drafted", "chunk": "security", "count": len(security_comments)})
         all_comments.extend(security_comments)
+        audit.append({"stage": "drafted", "chunk": "dependency", "count": len(dependency_comments)})
         all_comments.extend(dependency_comments)
+        audit.append({"stage": "drafted", "chunk": "osv", "count": len(osv_comments)})
+        all_comments.extend(osv_comments)
 
         all_comments = [classify_severity(c) for c in all_comments]
 

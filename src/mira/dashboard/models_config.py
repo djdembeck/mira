@@ -100,6 +100,28 @@ def get_review_model(config: LLMConfig, db_value: str | None = None) -> str:
     return config.model
 
 
+def get_security_model(
+    config: LLMConfig,
+    db_value: str | None = None,
+    db_review_model: str | None = None,
+) -> str:
+    """Resolve the security-pass model: DB → config.security_model → review tier.
+
+    The review-tier fallback includes the dashboard's review_model setting
+    (``db_review_model``) — without it, an instance whose review model lives
+    only in the DB silently falls all the way back to ``config.model``.
+
+    Never falls back to ``indexing_model`` — the security sweep is the
+    highest-stakes cheap pass, and silently downgrading it to the indexing
+    tier trades security recall for indexing cost savings.
+    """
+    if db_value:
+        return db_value
+    if config.security_model:
+        return config.security_model
+    return get_review_model(config, db_review_model)
+
+
 def get_review_thinking_mode(config: LLMConfig, db_value: str | None = None) -> str | None:
     """Resolve the review thinking mode: DB → config.review_reasoning_effort → None.
 
@@ -123,6 +145,7 @@ def llm_config_for(purpose: str, base: LLMConfig) -> LLMConfig:
     """
     db_model: str | None = None
     db_thinking: str | None = None
+    db_review: str | None = None
     db_style: str | None = None
     try:
         from mira.dashboard.api import _app_db
@@ -133,6 +156,10 @@ def llm_config_for(purpose: str, base: LLMConfig) -> LLMConfig:
             elif purpose == "review":
                 db_model = _app_db.get_setting("review_model")
                 db_thinking = _app_db.get_setting("review_thinking_mode")
+            elif purpose == "security":
+                db_model = _app_db.get_setting("security_model")
+                db_thinking = _app_db.get_setting("review_thinking_mode")
+                db_review = _app_db.get_setting("review_model")
             db_style = _app_db.get_setting("api_style")
     except Exception:
         pass  # DB not available — resolve from config fields alone
@@ -143,6 +170,10 @@ def llm_config_for(purpose: str, base: LLMConfig) -> LLMConfig:
     if purpose == "indexing":
         resolved = get_indexing_model(base, db_model)
         config_model = base.indexing_model
+    elif purpose == "security":
+        resolved = get_security_model(base, db_model, db_review)
+        config_model = base.security_model or base.review_model
+        thinking_mode = get_review_thinking_mode(base, db_thinking)
     elif purpose == "review":
         resolved = get_review_model(base, db_model)
         config_model = base.review_model

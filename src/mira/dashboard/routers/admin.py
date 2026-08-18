@@ -159,14 +159,17 @@ async def get_models() -> ModelsResponse:
         get_indexing_model,
         get_review_model,
         get_review_thinking_mode,
+        get_security_model,
         resolve_api_style,
     )
 
     config = load_config()
     db_indexing = _api._app_db.get_setting("indexing_model")
     db_review = _api._app_db.get_setting("review_model")
+    db_security = _api._app_db.get_setting("security_model")
     indexing = get_indexing_model(config.llm, db_indexing)
     review = get_review_model(config.llm, db_review)
+    security = get_security_model(config.llm, db_security, db_review)
     thinking = get_review_thinking_mode(
         config.llm, _api._app_db.get_setting("review_thinking_mode")
     )
@@ -178,13 +181,17 @@ async def get_models() -> ModelsResponse:
     return ModelsResponse(
         indexing_model=indexing,
         review_model=review,
+        security_model=security,
         backend=backend,
         indexing_source="dashboard" if db_indexing else "config",
         review_source="dashboard" if db_review else "config",
+        security_source="dashboard" if db_security else "config",
         config_indexing_model=get_indexing_model(config.llm),
         config_review_model=get_review_model(config.llm),
+        config_security_model=get_security_model(config.llm),
         indexing_options=[ModelOption(**m) for m in build_options(backend, catalog, "indexing")],
         review_options=[ModelOption(**m) for m in build_options(backend, catalog, "review")],
+        security_options=[ModelOption(**m) for m in build_options(backend, catalog, "review")],
         review_thinking_mode=thinking or "off",
         thinking_options=[ModelOption(**m) for m in THINKING_MODES],
         api_style=api_style,
@@ -273,6 +280,7 @@ def set_models(body: ModelsUpdate, request: Request) -> dict:
     # registry falls back gracefully for pricing/limits of unknown ids.
     _api._app_db.set_setting("indexing_model", body.indexing_model.strip())
     _api._app_db.set_setting("review_model", body.review_model.strip())
+    _api._app_db.set_setting("security_model", body.security_model.strip())
     # Clear "off" to "" rather than persisting the literal — "off" is the
     # default, and a stored value would shadow a mira.yaml
     # `review_reasoning_effort` override. "" (not None — the column is NOT NULL)
